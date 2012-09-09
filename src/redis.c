@@ -1198,6 +1198,10 @@ void initServerConfig() {
     server.assert_line = 0;
     server.bug_report_start = 0;
     server.watchdog_period = 0;
+
+    /* Store Style: added by riceball */
+    server.storeType = STORE_IN_XATTR;
+    server.storePath = zstrdup("data.idb");
 }
 
 /* This function will try to raise the max number of open files accordingly to

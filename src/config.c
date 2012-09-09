@@ -367,6 +367,15 @@ void loadServerConfigFromString(char *config) {
                 err = sentinelHandleConfiguration(argv+1,argc-1);
                 if (err) goto loaderr;
             }
+        } else if (!strcasecmp(argv[0],"store-type") && argc == 2) {
+            server.storeType = atoi(argv[1]);
+            if (server.storeType < 0 || server.storeType > 3) {
+                err = "store-Type must be 0(Don't Store), 1(InFile) , 2(InXattr) or 3(Both)";
+                goto loaderr;
+            }
+        } else if (!strcasecmp(argv[0],"store-path") && argc == 2) {
+            zfree(server.storePath);
+            server.storePath = zstrdup(argv[1]);
         } else {
             err = "Bad directive or wrong number of arguments"; goto loaderr;
         }
@@ -672,6 +681,13 @@ void configSetCommand(redisClient *c) {
         if (getLongLongFromObject(o,&ll) == REDIS_ERR ||
             ll <= 0) goto badfmt;
         server.slave_priority = ll;
+    } else if (!strcasecmp(c->argv[2]->ptr,"store-type")) {
+        if (getLongLongFromObject(o,&ll) == REDIS_ERR ||
+            ll <= 0) goto badfmt;
+        server.storeType = ll;
+    } else if (!strcasecmp(c->argv[2]->ptr,"store-path")) {
+        zfree(server.storePath);
+        server.storePath = zstrdup(o->ptr);
     } else {
         addReplyErrorFormat(c,"Unsupported CONFIG parameter: %s",
             (char*)c->argv[2]->ptr);

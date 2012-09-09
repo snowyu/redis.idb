@@ -744,6 +744,9 @@ struct redisServer {
     int assert_line;
     int bug_report_start; /* True if bug report header was already logged. */
     int watchdog_period;  /* Software watchdog period in ms. 0 = off */
+    /* Store Style: added by riceball*/
+    int storeType;        /* set type for STORE_IN_FILE and STORE_IN_XATTR */
+    char *storePath;      /* path to store the data */
 };
 
 typedef struct pubsubPattern {
