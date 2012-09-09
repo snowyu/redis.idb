@@ -74,7 +74,6 @@ static inline int DirectoryExists(const char *aFolderPath){
     }
 }
 
-bool IsDirValueExists(const sds aDir, const sds aAttribute);
 int ForceDirectories(const char* aFolderPath, mode_t aMode);
 
 //Join aPath and aPath2

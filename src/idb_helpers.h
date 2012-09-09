@@ -42,9 +42,15 @@
  #endif
 
  //Low-Level functions
- bool IsDirValueExists(const sds aDir, const sds aAttribute);
+ //-1 means err, 0 means false, 1 means true.
+ int IsDirValueExists(const sds aDir, const sds aAttribute);
  sds GetDirValue(const sds aDir, const sds aAttribute);
- bool SetDirValue(const sds aDir, const sds aValue, const sds aAttribute);
+ int SetDirValue(const sds aDir, const sds aValue, const sds aAttribute);
+
+ int iIsExists(const sds aDir, const sds aKey, const sds aAttribute, const int aStoreType);
+ sds iGet(const sds aDir, const sds aKey, const sds aAttribute, const int aStoreType);
+ int iPut(const sds aDir, const sds aKey, const sds aValue, const sds aAttribute, const int aStoreType);
+ int iDelete(const sds aDir, const sds aKey);
 
  #ifdef __cplusplus
  }
