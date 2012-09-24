@@ -2,6 +2,7 @@
 
 #include <signal.h>
 #include <ctype.h>
+#include "idb_helpers.h"
 
 void SlotToKeyAdd(robj *key);
 void SlotToKeyDel(robj *key);
@@ -12,6 +13,17 @@ void SlotToKeyDel(robj *key);
 
 robj *lookupKey(redisDb *db, robj *key) {
     dictEntry *de = dictFind(db->dict,key->ptr);
+    if (!de) { //try find on storage and cache it
+        //printf("ddd=%d\n", sdslen(key->ptr));
+        sds vValue = iGet(server.storePath, key->ptr, sdslen(key->ptr), NULL, server.storeType);
+        if (vValue) {
+            robj *o = createObject(REDIS_STRING,vValue);
+            //dbAdd(db, key, o);
+            sds copy = sdsdup(key->ptr);
+            int retval = dictAdd(db->dict, copy, o);
+            de = dictFind(db->dict,key->ptr);
+        }
+    }
     if (de) {
         robj *val = dictGetVal(de);
 
@@ -65,6 +77,7 @@ void dbAdd(redisDb *db, robj *key, robj *val) {
 
     redisAssertWithInfo(NULL,key,retval == REDIS_OK);
     if (server.cluster_enabled) SlotToKeyAdd(key);
+    iPut(server.storePath, key->ptr, sdslen(key->ptr), val->ptr, NULL, server.storeType);
  }
 
 /* Overwrite an existing key with a new value. Incrementing the reference
@@ -74,9 +87,10 @@ void dbAdd(redisDb *db, robj *key, robj *val) {
  * The program is aborted if the key was not already present. */
 void dbOverwrite(redisDb *db, robj *key, robj *val) {
     struct dictEntry *de = dictFind(db->dict,key->ptr);
-    
+
     redisAssertWithInfo(NULL,key,de != NULL);
     dictReplace(db->dict, key->ptr, val);
+    iPut(server.storePath, key->ptr, sdslen(key->ptr), val->ptr, NULL, server.storeType);
 }
 
 /* High level Set operation. This function can be used in order to set
@@ -97,7 +111,11 @@ void setKey(redisDb *db, robj *key, robj *val) {
 }
 
 int dbExists(redisDb *db, robj *key) {
-    return dictFind(db->dict,key->ptr) != NULL;
+    int result = dictFind(db->dict,key->ptr) != NULL;
+    if (!result) {
+        result = iIsExists(server.storePath, key->ptr, sdslen(key->ptr), NULL, server.storeType);
+    }
+    return result;
 }
 
 /* Return a random key, in form of a Redis object.
@@ -131,6 +149,7 @@ int dbDelete(redisDb *db, robj *key) {
     /* Deleting an entry from the expires dict will not free the sds of
      * the key, because it is shared with the main dictionary. */
     if (dictSize(db->expires) > 0) dictDelete(db->expires,key->ptr);
+    iDelete(server.storePath, key->ptr, sdslen(key->ptr));
     if (dictDelete(db->dict,key->ptr) == DICT_OK) {
         if (server.cluster_enabled) SlotToKeyDel(key);
         return 1;
