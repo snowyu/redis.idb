@@ -47,10 +47,10 @@
  sds GetDirValue(const sds aDir, const sds aAttribute);
  int SetDirValue(const sds aDir, const sds aValue, const sds aAttribute);
 
- int iIsExists(const sds aDir, const sds aKey, const sds aAttribute, const int aStoreType);
- sds iGet(const sds aDir, const sds aKey, const sds aAttribute, const int aStoreType);
- int iPut(const sds aDir, const sds aKey, const sds aValue, const sds aAttribute, const int aStoreType);
- int iDelete(const sds aDir, const sds aKey);
+ int iIsExists(const sds aDir, const char* aKey, const int aKeyLen, const sds aAttribute, const int aStoreType);
+ sds iGet(const sds aDir, const char* aKey, const int aKeyLen, const sds aAttribute, const int aStoreType);
+ int iPut(const sds aDir, const char* aKey, const int aKeyLen, const sds aValue, const sds aAttribute, const int aStoreType);
+ int iDelete(const sds aDir, const char* aKey, const int aKeyLen);
 
  #ifdef __cplusplus
  }

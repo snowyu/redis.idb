@@ -91,13 +91,10 @@ int SetDirValue(const sds aDir, const sds aValue, const sds aAttribute)
     return result;
 }
 
-int iIsExists(const sds aDir, const sds aKey, const sds aAttribute, const int aStoreType){
+int iIsExists(const sds aDir, const char* aKey, const int aKeyLen, const sds aAttribute, const int aStoreType){
     int result = -1;
-    sds vDir = sdsJoinPathLen(sdsdup(aDir), aKey, sdslen(aKey));
-    if BIT_CHECK(aStoreType, STORE_IN_FILE_BIT) {
-        result = IsDirValueExists(vDir, aAttribute);
-    }
-    if (result == -1 && BIT_CHECK(aStoreType, STORE_IN_XATTR_BIT)) {
+    sds vDir = sdsJoinPathLen(sdsdup(aDir), aKey, aKeyLen);
+    if BIT_CHECK(aStoreType, STORE_IN_XATTR_BIT) {
         sds s = sdsnew(XATTR_PREFIX);
         if (aAttribute)
             s = sdscatsds(s, aAttribute);
@@ -106,13 +103,16 @@ int iIsExists(const sds aDir, const sds aKey, const sds aAttribute, const int aS
         result = IsXattrExists(vDir, s);
         sdsfree(s);
     }
+    if (result == -1 && BIT_CHECK(aStoreType, STORE_IN_FILE_BIT)) {
+        result = IsDirValueExists(vDir, aAttribute);
+    }
     sdsfree(vDir);
     return result;
-};
+}
 
-sds iGet(const sds aDir, const sds aKey, const sds aAttribute, const int aStoreType){
+sds iGet(const sds aDir, const char* aKey, const int aKeyLen, const sds aAttribute, const int aStoreType){
     sds result = NULL;
-    sds vDir = sdsJoinPathLen(sdsdup(aDir), aKey, sdslen(aKey));
+    sds vDir = sdsJoinPathLen(sdsdup(aDir), aKey, aKeyLen);
     if BIT_CHECK(aStoreType, STORE_IN_XATTR_BIT) {
         sds s = sdsnew(XATTR_PREFIX);
         if (aAttribute)
@@ -127,16 +127,15 @@ sds iGet(const sds aDir, const sds aKey, const sds aAttribute, const int aStoreT
     }
     sdsfree(vDir);
     return result;
-};
+}
 
-int iPut(const sds aDir, const sds aKey, const sds aValue, const sds aAttribute, const int aStoreType){
-    sds vDir = sdsJoinPathLen(sdsdup(aDir), aKey, sdslen(aKey));
+int iPut(const sds aDir, const char* aKey, const int aKeyLen, const sds aValue, const sds aAttribute, const int aStoreType){
+    sds vDir = sdsJoinPathLen(sdsdup(aDir), aKey, aKeyLen);
     int result = DirectoryExists(vDir);
     if (result == 0) { //Dir not Exists:
         ForceDirectories(vDir, O_RWXRWXR_XPERMS);
     }
     else if (result == -1) {//File Exists Error:
-        printf("iPut ERR File Exists");
         return result;
     }
     //if (result == 1) //Dir Exists:
@@ -158,14 +157,14 @@ int iPut(const sds aDir, const sds aKey, const sds aValue, const sds aAttribute,
     }
     sdsfree(vDir);
     return result;
-};
+}
 
-int iDelete(const sds aDir, const sds aKey){
-    sds vDir = sdsJoinPathLen(sdsdup(aDir), aKey, sdslen(aKey));
+int iDelete(const sds aDir, const char* aKey, const int aKeyLen){
+    sds vDir = sdsJoinPathLen(sdsdup(aDir), aKey, aKeyLen);
     int result = DeleteDir(vDir) == 0;
     sdsfree(vDir);
     return result;
-};
+}
 
 #ifdef IDB_HELPER_TEST_MAIN
 #include <stdio.h>
@@ -178,30 +177,50 @@ int main(int argc, char **argv)
     {
         ForceDirectories("testdir/good/better/best", O_RWXRWXR_XPERMS);
         test_cond("DirectoryExists('testdir/good/better/best')", DirectoryExists("testdir/good/better/best") == 1);
-        sds x = sdsnew("testdir"), key=sdsnew("mytestkey"), y = sdsnew("hi world");
+        sds x = sdsnew("testdir"), key=sdsnew("mytestkey"), y = sdsnew("hi world"), xa_value_name=sdsnew(XATTR_PREFIX);
+        xa_value_name=sdscat(xa_value_name, IDB_VALUE_NAME);
         test_cond("SetDirValue('testdir', 'hi world')", SetDirValue(x, y, NULL));
         test_cond("IsDirValueExists(testdir, NULL)", IsDirValueExists(x, NULL));
         sds result = GetDirValue(x, NULL);
         test_cond("GetDirValue(testdir)",
                 result && sdslen(result) == 8 && memcmp(result, "hi world\0", 9) == 0
         );
-        test_cond("iPut('testdir','mytestkey', 'hi world', STORE_IN_FILE)", iPut(x, key, y, NULL, STORE_IN_FILE));
+        test_cond("iPut('testdir','mytestkey', 'hi world', STORE_IN_FILE)", iPut(x, key, sdslen(key), y, NULL, STORE_IN_FILE));
         sds path=sdsnew("testdir/mytestkey");
         test_cond("IsDirValueExists(testdir/mytestkey, NULL)", IsDirValueExists(path, NULL));
-        test_cond("iIsExists(testdir, mytestkey) should be exists.", iIsExists(x, key, NULL, STORE_IN_FILE));
+        test_cond("iIsExists(testdir, mytestkey, STORE_IN_FILE) should be exists.", iIsExists(x, key, strlen(key),NULL, STORE_IN_FILE));
         if (result) sdsfree(result);
         result = GetDirValue(path, NULL);
         test_cond("GetDirValue(testdir/mytestkey)",
                 result && sdslen(result) == 8 && memcmp(result, "hi world\0", 9) == 0
         );
         if (result) sdsfree(result);
-        result = iGet(x, key, NULL, STORE_IN_FILE);
-        test_cond("iGet(testdir, mytestkey, NULL)",
+        result = iGet(x, key, strlen(key), NULL, STORE_IN_FILE);
+        test_cond("iGet(testdir, mytestkey, NULL, STORE_IN_FILE)",
                 result && sdslen(result) == 8 && memcmp(result, "hi world\0", 9) == 0
         );
-        test_cond("iDelete(testdir, mytestkey)", iDelete(x, key));
+        test_cond("iDelete(testdir, mytestkey)", iDelete(x, key, sdslen(key)));
         test_cond("IsDirValueExists(testdir/mytestkey, NULL) == false", !IsDirValueExists(path, NULL));
-        test_cond("iIsExists(testdir, mytestkey) should not be exists.", !iIsExists(x, key, NULL, STORE_IN_FILE));
+        test_cond("iIsExists(testdir, mytestkey) should not be exists.", !iIsExists(x, key, strlen(key), NULL, STORE_IN_FILE));
+
+        test_cond("iPut('testdir','mytestkey', 'hi world', STORE_IN_XATTR)", iPut(x, key, sdslen(key), y, NULL, STORE_IN_XATTR));
+        test_cond("IsDirValueExists(testdir/mytestkey, NULL)", !IsDirValueExists(path, NULL));
+        test_cond("IsXattrExists(testdir/mytestkey, IDB_VALUE_NAME)", IsXattrExists(path, xa_value_name));
+        test_cond("iIsExists(testdir, mytestkey, STORE_IN_XATTR) should be exists.", iIsExists(x, key, strlen(key),NULL, STORE_IN_XATTR));
+        if (result) sdsfree(result);
+        result = GetXattr(path, xa_value_name);
+        test_cond("GetXattr(testdir/mytestkey, IDB_VALUE_NAME)",
+                result && sdslen(result) == 8 && memcmp(result, "hi world\0", 9) == 0
+        );
+        if (result) sdsfree(result);
+        result = iGet(x, key, strlen(key), NULL, STORE_IN_XATTR);
+        test_cond("iGet(testdir, mytestkey, NULL, STORE_IN_XATTR)",
+                result && sdslen(result) == 8 && memcmp(result, "hi world\0", 9) == 0
+        );
+        test_cond("iDelete(testdir, mytestkey)", iDelete(x, key, sdslen(key)));
+        test_cond("IsDirValueExists(testdir/mytestkey, NULL) == false", !IsDirValueExists(path, NULL));
+        test_cond("iIsExists(testdir, mytestkey) should not be exists.", !iIsExists(x, key, strlen(key), NULL, STORE_IN_FILE));
+ 
         sdsfree(path);
         sdsfree(x);
         sdsfree(y);
