@@ -47,11 +47,11 @@
 
 struct _iDB {
   char *path;                   //the iDB database path.
-  bool opened;                  //whether the internal database is opened
-  bool loadOnDemand;
-  bool storeInXattr;            //enabled the xattr storage.
-  bool storeInFile;             //enabled the file storage.
-  bool raiseOnTypeMismatch;     //raise error if Type Mismatch
+  int opened;                   //whether the internal database is opened
+  int loadOnDemand;
+  int storeStyle;               //enabled the xattr storage or file storage in here.
+                                //see config.h<STORE_IN_FILE...>
+  int raiseOnTypeMismatch;     //raise error if Type Mismatch
 };
 
 typedef struct _iDB iDB;
