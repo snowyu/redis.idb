@@ -1200,8 +1200,8 @@ void initServerConfig() {
     server.watchdog_period = 0;
 
     /* Store Style: added by riceball */
-    server.storeType = STORE_IN_XATTR;
-    server.storePath = zstrdup("data.idb");
+    server.storeType = STORE_IN_FILE;
+    server.storePath = sdsnew("data.idb");
 }
 
 /* This function will try to raise the max number of open files accordingly to

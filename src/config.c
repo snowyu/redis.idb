@@ -374,8 +374,8 @@ void loadServerConfigFromString(char *config) {
                 goto loaderr;
             }
         } else if (!strcasecmp(argv[0],"store-path") && argc == 2) {
-            zfree(server.storePath);
-            server.storePath = zstrdup(argv[1]);
+            sdsfree(server.storePath);
+            server.storePath = sdsnew(argv[1]);
         } else {
             err = "Bad directive or wrong number of arguments"; goto loaderr;
         }
