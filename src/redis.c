@@ -1796,6 +1796,7 @@ int prepareForShutdown(int flags) {
         redisLog(REDIS_NOTICE,"Removing the unix socket file.");
         unlink(server.unixsocket); /* don't care if this fails */
     }
+    if (server.storePath) sdsfree(server.storePath);
 
     redisLog(REDIS_WARNING,"Redis is now ready to exit, bye bye...");
     return REDIS_OK;
