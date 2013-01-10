@@ -1,5 +1,35 @@
+/*
+ * Copyright (c) 2009-2012, Salvatore Sanfilippo <antirez at gmail dot com>
+ * All rights reserved.
+ *
+ * Redistribution and use in source and binary forms, with or without
+ * modification, are permitted provided that the following conditions are met:
+ *
+ *   * Redistributions of source code must retain the above copyright notice,
+ *     this list of conditions and the following disclaimer.
+ *   * Redistributions in binary form must reproduce the above copyright
+ *     notice, this list of conditions and the following disclaimer in the
+ *     documentation and/or other materials provided with the distribution.
+ *   * Neither the name of Redis nor the names of its contributors may be used
+ *     to endorse or promote products derived from this software without
+ *     specific prior written permission.
+ *
+ * THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS"
+ * AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
+ * IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE
+ * ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT OWNER OR CONTRIBUTORS BE
+ * LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR
+ * CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF
+ * SUBSTITUTE GOODS OR SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS
+ * INTERRUPTION) HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN
+ * CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE)
+ * ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE
+ * POSSIBILITY OF SUCH DAMAGE.
+ */
+
 #include "redis.h"
 #include "sha1.h"   /* SHA1 is used for DEBUG DIGEST */
+#include "crc64.h"
 
 #include <arpa/inet.h>
 #include <signal.h>
@@ -8,6 +38,7 @@
 #include <execinfo.h>
 #include <ucontext.h>
 #include <fcntl.h>
+#include "bio.h"
 #endif /* HAVE_BACKTRACE */
 
 /* ================================= Debugging ============================== */
@@ -636,6 +667,88 @@ void logCurrentClient(void) {
     }
 }
 
+#if defined(HAVE_PROC_MAPS)
+void memtest_non_destructive_invert(void *addr, size_t size);
+void memtest_non_destructive_swap(void *addr, size_t size);
+#define MEMTEST_MAX_REGIONS 128
+
+int memtest_test_linux_anonymous_maps(void) {
+    FILE *fp = fopen("/proc/self/maps","r");
+    char line[1024];
+    size_t start_addr, end_addr, size;
+    size_t start_vect[MEMTEST_MAX_REGIONS];
+    size_t size_vect[MEMTEST_MAX_REGIONS];
+    int regions = 0, j;
+    uint64_t crc1 = 0, crc2 = 0, crc3 = 0;
+
+    while(fgets(line,sizeof(line),fp) != NULL) {
+        char *start, *end, *p = line;
+
+        start = p;
+        p = strchr(p,'-');
+        if (!p) continue;
+        *p++ = '\0';
+        end = p;
+        p = strchr(p,' ');
+        if (!p) continue;
+        *p++ = '\0';
+        if (strstr(p,"stack") ||
+            strstr(p,"vdso") ||
+            strstr(p,"vsyscall")) continue;
+        if (!strstr(p,"00:00")) continue;
+        if (!strstr(p,"rw")) continue;
+
+        start_addr = strtoul(start,NULL,16);
+        end_addr = strtoul(end,NULL,16);
+        size = end_addr-start_addr;
+
+        start_vect[regions] = start_addr;
+        size_vect[regions] = size;
+        printf("Testing %lx %lu\n", start_vect[regions], size_vect[regions]);
+        regions++;
+    }
+
+    /* Test all the regions as an unique sequential region.
+     * 1) Take the CRC64 of the memory region. */
+    for (j = 0; j < regions; j++) {
+        crc1 = crc64(crc1,(void*)start_vect[j],size_vect[j]);
+    }
+
+    /* 2) Invert bits, swap adiacent words, swap again, invert bits.
+     * This is the error amplification step. */
+    for (j = 0; j < regions; j++)
+        memtest_non_destructive_invert((void*)start_vect[j],size_vect[j]);
+    for (j = 0; j < regions; j++)
+        memtest_non_destructive_swap((void*)start_vect[j],size_vect[j]);
+    for (j = 0; j < regions; j++)
+        memtest_non_destructive_swap((void*)start_vect[j],size_vect[j]);
+    for (j = 0; j < regions; j++)
+        memtest_non_destructive_invert((void*)start_vect[j],size_vect[j]);
+
+    /* 3) Take the CRC64 sum again. */
+    for (j = 0; j < regions; j++)
+        crc2 = crc64(crc2,(void*)start_vect[j],size_vect[j]);
+
+    /* 4) Swap + Swap again */
+    for (j = 0; j < regions; j++)
+        memtest_non_destructive_swap((void*)start_vect[j],size_vect[j]);
+    for (j = 0; j < regions; j++)
+        memtest_non_destructive_swap((void*)start_vect[j],size_vect[j]);
+
+    /* 5) Take the CRC64 sum again. */
+    for (j = 0; j < regions; j++)
+        crc3 = crc64(crc3,(void*)start_vect[j],size_vect[j]);
+
+    /* NOTE: It is very important to close the file descriptor only now
+     * because closing it before may result into unmapping of some memory
+     * region that we are testing. */
+    fclose(fp);
+
+    /* If the two CRC are not the same, we trapped a memory error. */
+    return crc1 != crc2 || crc2 != crc3;
+}
+#endif
+
 void sigsegvHandler(int sig, siginfo_t *info, void *secret) {
     ucontext_t *uc = (ucontext_t*) secret;
     sds infostring, clients;
@@ -670,6 +783,19 @@ void sigsegvHandler(int sig, siginfo_t *info, void *secret) {
 
     /* Log dump of processor registers */
     logRegisters(uc);
+
+#if defined(HAVE_PROC_MAPS)
+    /* Test memory */
+    redisLog(REDIS_WARNING, "--- FAST MEMORY TEST");
+    bioKillThreads();
+    if (memtest_test_linux_anonymous_maps()) {
+        redisLog(REDIS_WARNING,
+            "!!! MEMORY ERROR DETECTED! Check your memory ASAP !!!");
+    } else {
+        redisLog(REDIS_WARNING,
+            "Fast memory test PASSED, however your memory can still be broken. Please run a memory test for several hours if possible.");
+    }
+#endif
 
     redisLog(REDIS_WARNING,
 "\n=== REDIS BUG REPORT END. Make sure to include from START to END. ===\n\n"
@@ -748,7 +874,7 @@ void watchdogScheduleSignal(int period) {
     setitimer(ITIMER_REAL, &it, NULL);
 }
 
-/* Enable the software watchdong with the specified period in milliseconds. */
+/* Enable the software watchdog with the specified period in milliseconds. */
 void enableWatchdog(int period) {
     int min_period;
 
@@ -765,7 +891,7 @@ void enableWatchdog(int period) {
     /* If the configured period is smaller than twice the timer period, it is
      * too short for the software watchdog to work reliably. Fix it now
      * if needed. */
-    min_period = (1000/REDIS_HZ)*2;
+    min_period = (1000/server.hz)*2;
     if (period < min_period) period = min_period;
     watchdogScheduleSignal(period); /* Adjust the current timer. */
     server.watchdog_period = period;
