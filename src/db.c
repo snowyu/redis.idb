@@ -178,8 +178,8 @@ int dbDelete(redisDb *db, robj *key) {
     /* Deleting an entry from the expires dict will not free the sds of
      * the key, because it is shared with the main dictionary. */
     if (dictSize(db->expires) > 0) dictDelete(db->expires,key->ptr);
-    iDelete(server.storePath, key->ptr, sdslen(key->ptr));
     if (dictDelete(db->dict,key->ptr) == DICT_OK) {
+        iDelete(server.storePath, key->ptr, sdslen(key->ptr));
         if (server.cluster_enabled) SlotToKeyDel(key);
         return 1;
     } else {
