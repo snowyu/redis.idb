@@ -1,5 +1,5 @@
 /*
-  Copyright (c) 2012 Riceball LEE(snowyu.lee@gmail.com)
+  Copyright (c) 2012-2013 Riceball LEE(snowyu.lee@gmail.com)
  
   Permission is hereby granted, free of charge, to any person obtaining a copy
   of this software and associated documentation files (the "Software"), to deal
@@ -54,6 +54,11 @@ int MoveDir(const char* aSrc, const char* aDest);
 //retrun 0 means successful.
 int DeleteDir(const char* aDir);
 
+//test the filename whether is a directory
+//return 0 = a file, 1 = a Dir, 2 = a symbolic dir, -999 = a symbolic file, -2 = Not Exists(ENOENT), < 0 others means error code.
+//See Also: DirectoryExists
+int IsDirectory(const char* aFileName);
+
 /*
   return
      -1: file exits.
@@ -73,6 +78,9 @@ static inline int DirectoryExists(const char *aFolderPath){
         return -1; //the file exits.
     }
 }
+
+//#include <unistd.h>
+//int symlink(const char *srcPath, const char *destPath); //make symbolic link(destPath) to a srcPath
 
 int ForceDirectories(const char* aFolderPath, mode_t aMode);
 

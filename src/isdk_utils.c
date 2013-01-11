@@ -1,5 +1,5 @@
 /*
-  Copyright (c) 2012 Riceball LEE(snowyu.lee@gmail.com)
+  Copyright (c) 2012-2013 Riceball LEE(snowyu.lee@gmail.com)
 
   Permission is hereby granted, free of charge, to any person obtaining a copy
   of this software and associated documentation files (the "Software"), to deal
@@ -96,6 +96,36 @@ int ForceDirectories(const char* aFolderPath, mode_t aMode)
         status = do_mkdir(aFolderPath, aMode);
     free(copypath);
     return (status);
+}
+
+//test the filename whether is a directory
+//return 0 = a file, 1 = a Dir, 2 = a symbolic dir, -999 = a symbolic file, -2 = Not Exists(ENOENT), < 0 others means error code.
+int IsDirectory(const char* aFileName)
+{
+    //char const *b = last_component(aFileName);
+    //size_t blen = strlen(b);
+    //bool vLooksLikeDir = (blen == 0 || ISSLASH(b[blen - 1]));
+    struct stat st;
+    //int result = 0;
+    int vStatResult = lstat(aFileName, &st);
+    int err = (vStatResult == 0 ? 0 : -errno);
+    if (!err) {
+      bool vIsLink = S_ISLNK(st.st_mode);
+      if (vIsLink) {
+          vStatResult = stat(aFileName, &st);
+          err = (vStatResult == 0 ? 0 : -errno);
+          if (err) {
+              return err;
+          }
+      }
+      bool vIsDir = S_ISDIR(st.st_mode);
+      if (vIsLink) {
+          err = (vIsDir ? 2 : -999);
+      } else {
+          err = (vIsDir ? 1 : 0);
+      }
+    }
+    return err;
 }
 
 //Join path2 to aPath
@@ -325,15 +355,17 @@ static int UrlDecode(char *vStr, int len)
 #include "testhelp.h"
 
 //Note: sds.* zmalloc.* config.h come from redis src
-//gcc --std=c99 -I. -Ideps  -o test  -DISDK_UTILS_TEST_MAIN isdk_utils.c deps/sds.c deps/zmalloc.c
+//gcc --std=c99 -I. -Ideps  -o test -DISDK_UTILS_TEST_MAIN isdk_utils.c deps/sds.c deps/zmalloc.c
 int main(void) {
     {
         ForceDirectories("testdir/good/better/best?", O_RWXRWXR_XPERMS);
         test_cond("DirectoryExists('testdir/good/better/best?')", DirectoryExists("testdir/good/better/best?") == 1);
         test_cond("MoveDir(\"testdir/good/better\", \"testdir/good/ok\")", MoveDir("testdir/good/better", "testdir/good/ok")==0);
         test_cond("DirectoryExists('testdir/good/ok')", DirectoryExists("testdir/good/ok") == 1);
+        test_cond("IsDirectory('testdir/good/ok')", IsDirectory("testdir/good/ok") == 1);
         test_cond("DeleteDir('testdir')", DeleteDir("testdir") == 0);
         test_cond("DirectoryExists('testdir')", DirectoryExists("testdir") == 0);
+        test_cond("IsDirectory('testdir')", IsDirectory("testdir") == -2);
         int fd = open_or_create_file("mytestfile", 0, O_RW_RW_R__PERMS);
         test_cond("open_or_create_file(mytestfile):open not exists file", fd != 0);
         close(fd);
@@ -342,6 +374,7 @@ int main(void) {
         close(fd);
         test_cond("DeleteDir('mytestfile')", DeleteDir("mytestfile") == 0);
         test_cond("DirectoryExists('mytestfile') is false", DirectoryExists("mytestfile") == 0);
+        test_cond("IsDirectory('mytestfile') is false", IsDirectory("mytestfile") == -2);
         char* s="testing encoding 'it' \"with\" path/haha/it and %& *?|<>.";
         char* r=UrlEncode(s, NULL);
         test_cond("UrlEncode('testing encoding 'it' \"with\" path/haha/it and %& *?|<>.', NULL)", strcmp(r, "testing encoding 'it' \"with\" path/haha/it and %25& *?|<>.")==0);
