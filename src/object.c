@@ -72,7 +72,7 @@ robj *createStringObjectFromLongDouble(long double value) {
     int len;
 
     /* We use 17 digits precision since with 128 bit floats that precision
-     * after rouding is able to represent most small decimal numbers in a way
+     * after rounding is able to represent most small decimal numbers in a way
      * that is "non surprising" for the user (that is, most small decimal
      * numbers will be represented in a way that when converted back into
      * a string are exactly the same as what the user typed.) */
@@ -97,7 +97,7 @@ robj *dupStringObject(robj *o) {
 robj *createListObject(void) {
     list *l = listCreate();
     robj *o = createObject(REDIS_LIST,l);
-    listSetFreeMethod(l,decrRefCount);
+    listSetFreeMethod(l,decrRefCountVoid);
     o->encoding = REDIS_ENCODING_LINKEDLIST;
     return o;
 }
@@ -215,9 +215,7 @@ void incrRefCount(robj *o) {
     o->refcount++;
 }
 
-void decrRefCount(void *obj) {
-    robj *o = obj;
-
+void decrRefCount(robj *o) {
     if (o->refcount <= 0) redisPanic("decrRefCount against refcount <= 0");
     if (o->refcount == 1) {
         switch(o->type) {
@@ -232,6 +230,13 @@ void decrRefCount(void *obj) {
     } else {
         o->refcount--;
     }
+}
+
+/* This variant of decrRefCount() gets its argument as void, and is useful
+ * as free method in data structures that expect a 'void free_object(void*)'
+ * prototype for the free method. */
+void decrRefCountVoid(void *o) {
+    decrRefCount(o);
 }
 
 /* This function set the ref count to zero without freeing the object.

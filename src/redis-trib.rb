@@ -1,7 +1,7 @@
 #!/usr/bin/env ruby
 
 # TODO (temporary here, we'll move this into the Github issues once
-#       redis-trib initial implementation is complted).
+#       redis-trib initial implementation is completed).
 #
 # - Make sure that if the rehashing fails in the middle redis-trib will try
 #   to recover.
@@ -17,14 +17,14 @@
 #   1) If there is a node that pretend to receive a slot, or to migrate a
 #      slot, but has no entries in that slot, fix it.
 #   2) If there is a node having keys in slots that are not owned by it
-#      fix this condiiton moving the entries in the same node.
+#      fix this condition moving the entries in the same node.
 #   3) Perform more possibly slow tests about the state of the cluster.
 #   4) When aborted slot migration is detected, fix it.
 
 require 'rubygems'
 require 'redis'
 
-ClusterHashSlots = 4096
+ClusterHashSlots = 16384
 
 def xputs(s)
     printf s
@@ -85,7 +85,7 @@ class ClusterNode
     def assert_empty
         if !(@r.cluster("info").split("\r\n").index("cluster_known_nodes:1")) ||
             (@r.info['db0'])
-            puts "Error: Node #{self} is not empty. Either the node already knows other nodes (check with nodes-info) or contains some key in database 0."
+            puts "Error: Node #{self} is not empty. Either the node already knows other nodes (check with CLUSTER NODES) or contains some key in database 0."
             exit 1
         end
     end
@@ -168,12 +168,12 @@ class ClusterNode
         # for instance: [1,2,3,4,5,8,9,20,21,22,23,24,25,30]
         slots = @info[:slots].keys.sort
 
-        # As we want to aggregate adiacent slots we convert all the
+        # As we want to aggregate adjacent slots we convert all the
         # slot integers into ranges (with just one element)
         # So we have something like [1..1,2..2, ... and so forth.
         slots.map!{|x| x..x}
 
-        # Finally we group ranges with adiacent elements.
+        # Finally we group ranges with adjacent elements.
         slots = slots.reduce([]) {|a,b|
             if !a.empty? && b.first == (a[-1].last)+1
                 a[0..-2] + [(a[-1].first)..(b.last)]
@@ -192,6 +192,20 @@ class ClusterNode
         "[#{@info[:cluster_state].upcase}] #{self.info[:name]} #{self.to_s} slots:#{slots} (#{self.slots.length} slots)"
     end
 
+    # Return a single string representing nodes and associated slots.
+    # TODO: remove slaves from config when slaves will be handled
+    # by Redis Cluster.
+    def get_config_signature
+        config = []
+        @r.cluster("nodes").each_line{|l|
+            s = l.split
+            slots = s[7..-1].select {|x| x[0..0] != "["}
+            next if slots.length == 0
+            config << s[0]+":"+(slots.sort.join(","))
+        }
+        config.sort.join("|")
+    end
+
     def info
         @info
     end
@@ -208,6 +222,8 @@ end
 class RedisTrib
     def initialize
         @nodes = []
+        @fix = false
+        @errors = []
     end
 
     def check_arity(req_args, num_args)
@@ -231,20 +247,113 @@ class RedisTrib
 
     def check_cluster
         puts "Performing Cluster Check (using node #{@nodes[0]})"
-        errors = []
         show_nodes
-        # Check if all the slots are covered
+        check_config_consistency
+        check_slots_coverage
+    end
+
+    # Merge slots of every known node. If the resulting slots are equal
+    # to ClusterHashSlots, then all slots are served.
+    def covered_slots
         slots = {}
         @nodes.each{|n|
             slots = slots.merge(n.slots)
         }
-        if slots.length == 4096
-            puts "[OK] All 4096 slots covered."
+        slots
+    end
+
+    def check_slots_coverage
+        slots = covered_slots
+        if slots.length == ClusterHashSlots
+            puts "[OK] All #{ClusterHashSlots} slots covered."
         else
-            errors << "[ERR] Not all 4096 slots are covered by nodes."
-            puts errors[-1]
+            @errors <<
+                "[ERR] Not all #{ClusterHashSlots} slots are covered by nodes."
+            puts @errors[-1]
+            fix_slots_coverage if @fix
         end
-        return errors
+    end
+
+    def nodes_with_keys_in_slot(slot)
+        nodes = []
+        @nodes.each{|n|
+            nodes << n if n.r.cluster("getkeysinslot",slot,1).length > 0
+        }
+        nodes
+    end
+
+    def fix_slots_coverage
+        not_covered = (0...ClusterHashSlots).to_a - covered_slots.keys
+        puts "\nFixing slots coverage..."
+        puts "List of not covered slots: " + not_covered.join(",")
+
+        # For every slot, take action depending on the actual condition:
+        # 1) No node has keys for this slot.
+        # 2) A single node has keys for this slot.
+        # 3) Multiple nodes have keys for this slot.
+        slots = {}
+        not_covered.each{|slot|
+            nodes = nodes_with_keys_in_slot(slot)
+            slots[slot] = nodes
+            puts "Slot #{slot} has keys in #{nodes.length} nodes: #{nodes.join}"
+        }
+
+        none = slots.select {|k,v| v.length == 0}
+        single = slots.select {|k,v| v.length == 1}
+        multi = slots.select {|k,v| v.length > 1}
+
+        # Handle case "1": keys in no node.
+        if none.length > 0
+            puts "The folowing uncovered slots have no keys across the cluster:"
+            puts none.keys.join(",")
+            yes_or_die "Fix these slots by covering with a random node?"
+            none.each{|slot,nodes|
+                node = @nodes.sample
+                puts "Covering slot #{slot} with #{node}"
+                node.r.cluster("addslots",slot)
+            }
+        end
+
+        # Handle case "2": keys only in one node.
+        if single.length > 0
+            puts "The folowing uncovered slots have keys in just one node:"
+            puts single.keys.join(",")
+            yes_or_die "Fix these slots by covering with those nodes?"
+            single.each{|slot,nodes|
+                puts "Covering slot #{slot} with #{nodes[0]}"
+                nodes[0].r.cluster("addslots",slot)
+            }
+        end
+
+        # Handle case "3": keys in multiple nodes.
+        if multi.length > 0
+            puts "The folowing uncovered slots have keys in multiple nodes:"
+            puts multi.keys.join(",")
+            yes_or_die "Fix these slots by moving keys into a single node?"
+            multi.each{|slot,nodes|
+                puts "Covering slot #{slot} moving keys to #{nodes[0]}"
+                # TODO
+                # 1) Set all nodes as "MIGRATING" for this slot, so that we
+                # can access keys in the hash slot using ASKING.
+                # 2) Move everything to node[0]
+                # 3) Clear MIGRATING from nodes, and ADDSLOTS the slot to
+                # node[0].
+                raise "TODO: Work in progress"
+            }
+        end
+    end
+
+    # Check if all the nodes agree about the cluster configuration
+    def check_config_consistency
+        signatures=[]
+        @nodes.each{|n|
+            signatures << n.get_config_signature
+        }
+        if signatures.uniq.length != 1
+            puts "[ERR] Nodes don't agree about configuration!"
+        else
+            puts "[OK] All nodes agree about slots configuration."
+        end
     end
 
     def alloc_slots
@@ -294,12 +403,13 @@ class RedisTrib
     end
 
     def load_cluster_info_from_node(nodeaddr)
-        node = ClusterNode.new(ARGV[1])
+        node = ClusterNode.new(nodeaddr)
         node.connect(:abort => true)
         node.assert_cluster
         node.load_info(:getfriends => true)
         add_node(node)
         node.friends.each{|f|
+            next if f[:flags].index("noaddr") or f[:flags].index("disconnected")
             fnode = ClusterNode.new(f[:addr])
             fnode.connect()
             fnode.load_info()
@@ -313,13 +423,16 @@ class RedisTrib
     def compute_reshard_table(sources,numslots)
         moved = []
         # Sort from bigger to smaller instance, for two reasons:
-        # 1) If we take less slots than instanes it is better to start getting from
-        #    the biggest instances.
-        # 2) We take one slot more from the first instance in the case of not perfect
-        #    divisibility. Like we have 3 nodes and need to get 10 slots, we take
-        #    4 from the first, and 3 from the rest. So the biggest is always the first.
+        # 1) If we take less slots than instances it is better to start
+        #    getting from the biggest instances.
+        # 2) We take one slot more from the first instance in the case of not
+        #    perfect divisibility. Like we have 3 nodes and need to get 10
+        #    slots, we take 4 from the first, and 3 from the rest. So the
+        #    biggest is always the first.
         sources = sources.sort{|a,b| b.slots.length <=> a.slots.length}
-        source_tot_slots = sources.inject(0) {|sum,source| sum+source.slots.length}
+        source_tot_slots = sources.inject(0) {|sum,source|
+            sum+source.slots.length
+        }
         sources.each_with_index{|s,i|
             # Every node will provide a number of slots proportional to the
             # slots it has assigned.
@@ -347,11 +460,11 @@ class RedisTrib
     def move_slot(source,target,slot,o={})
         # We start marking the slot as importing in the destination node,
         # and the slot as migrating in the target host. Note that the order of
-        # the operations is important, as otherwise a client may be redirected to
-        # the target node that does not yet know it is importing this slot.
+        # the operations is important, as otherwise a client may be redirected
+        # to the target node that does not yet know it is importing this slot.
         print "Moving slot #{slot} from #{source.info_string}: "; STDOUT.flush
         target.r.cluster("setslot",slot,"importing",source.info[:name])
-        source.r.cluster("setslot",slot,"migrating",source.info[:name])
+        source.r.cluster("setslot",slot,"migrating",target.info[:name])
         # Migrate all the keys from source to target using the MIGRATE command
         while true
             keys = source.r.cluster("getkeysinslot",slot,10)
@@ -371,21 +484,27 @@ class RedisTrib
 
     # redis-trib subcommands implementations
 
-    def check_cluster_cmd   
+    def check_cluster_cmd
+        load_cluster_info_from_node(ARGV[1])
+        check_cluster
+    end
+
+    def fix_cluster_cmd
+        @fix = true
         load_cluster_info_from_node(ARGV[1])
         check_cluster
     end
 
     def reshard_cluster_cmd
         load_cluster_info_from_node(ARGV[1])
-        errors = check_cluster
-        if errors.length != 0
+        check_cluster
+        if @errors.length != 0
             puts "Please fix your cluster problems before resharding."
             exit 1
         end
         numslots = 0
-        while numslots <= 0 or numslots > 4096
-            print "How many slots do you want to move (from 1 to 4096)? "
+        while numslots <= 0 or numslots > ClusterHashSlots
+            print "How many slots do you want to move (from 1 to #{ClusterHashSlots})? "
             numslots = STDIN.gets.to_i
         end
         target = nil
@@ -461,22 +580,54 @@ class RedisTrib
         join_cluster
         check_cluster
     end
+
+    def addnode_cluster_cmd
+        puts "Adding node #{ARGV[1]} to cluster #{ARGV[2]}"
+
+        # Check the existing cluster
+        load_cluster_info_from_node(ARGV[2])
+        check_cluster
+
+        # Add the new node
+        new = ClusterNode.new(ARGV[1])
+        new.connect(:abort => true)
+        new.assert_cluster
+        new.load_info
+        new.assert_empty
+        first = @nodes.first.info
+
+        # Send CLUSTER MEET command to the new node
+        puts "Send CLUSTER MEET to node #{new} to make it join the cluster."
+        new.r.cluster("meet",first[:host],first[:port])
+    end
+
+    def help_cluster_cmd
+        show_help
+        exit 0
+    end
 end
 
 COMMANDS={
-    "create" => ["create_cluster_cmd", -2, "host1:port host2:port ... hostN:port"],
-    "check" =>  ["check_cluster_cmd", 2, "host:port"],
-    "reshard" =>  ["reshard_cluster_cmd", 2, "host:port"]
+    "create"  => ["create_cluster_cmd", -2, "host1:port1 ... hostN:portN"],
+    "check"   => ["check_cluster_cmd", 2, "host:port"],
+    "fix"     => ["fix_cluster_cmd", 2, "host:port"],
+    "reshard" => ["reshard_cluster_cmd", 2, "host:port"],
+    "addnode" => ["addnode_cluster_cmd", 3, "new_host:new_port existing_host:existing_port"],
+    "help"    => ["help_cluster_cmd", 1, "(show this help)"]
 }
 
-# Sanity check
-if ARGV.length == 0
+def show_help
     puts "Usage: redis-trib <command> <arguments ...>"
     puts
     COMMANDS.each{|k,v|
-        puts "  #{k.ljust(20)} #{v[2]}"
+        puts "  #{k.ljust(10)} #{v[2]}"
     }
     puts
+end
+
+# Sanity check
+if ARGV.length == 0
+    show_help
     exit 1
 end
 
