@@ -180,7 +180,7 @@ int dbDelete(redisDb *db, robj *key) {
      * the key, because it is shared with the main dictionary. */
     if (dictSize(db->expires) > 0) dictDelete(db->expires,key->ptr);
     if (dictDelete(db->dict,key->ptr) == DICT_OK) {
-        iDelete(server.storePath, key->ptr, sdslen(key->ptr));
+        iKeyDelete(server.storePath, key->ptr, sdslen(key->ptr));
         if (server.cluster_enabled) slotToKeyDel(key);
         return 1;
     } else {
@@ -334,6 +334,10 @@ void keysCommand(redisClient *c) {
         }
     }
     dictReleaseIterator(di);
+    sds s = sdsnew(NULL);
+    s = sdscatprintf(s, "keys.argc=%d, dict.size=%d", c->argc, dictSize(c->db->dict));
+    robj *t = createStringObject(s,sdslen(s));
+    addReplyBulk(c,t);numkeys++;
     setDeferredMultiBulkLength(c,replylen,numkeys);
 }
 

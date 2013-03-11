@@ -36,6 +36,12 @@
 #include "sds.h"
 #include "zmalloc.h"
 
+static inline int cisprint(const uint8_t c)
+{
+    //if(c & 0x80 == 0x80 || c & 0xe0 == 0xe0 || c & 0xf0 == 0xf0) return 1;
+    return c >= 0x20;
+}
+
 sds sdsnewlen(const void *init, size_t initlen) {
     struct sdshdr *sh;
 
@@ -45,11 +51,17 @@ sds sdsnewlen(const void *init, size_t initlen) {
         sh = zcalloc(sizeof(struct sdshdr)+initlen+1);
     }
     if (sh == NULL) return NULL;
-    sh->len = initlen;
-    sh->free = 0;
-    if (initlen && init)
+    if (init) {
+        sh->len = initlen;
+        sh->free = 0;
+    } else {
+        sh->len = 0;
+        sh->free = initlen;
+    }
+    if (initlen && init) {
         memcpy(sh->buf, init, initlen);
-    sh->buf[initlen] = '\0';
+        sh->buf[initlen] = '\0';
+    }
     return (char*)sh->buf;
 }
 
@@ -254,6 +266,18 @@ sds sdscatprintf(sds s, const char *fmt, ...) {
     return t;
 }
 
+sds sdsprintf(sds s, const char *fmt, ...) {
+    struct sdshdr *sh = (void*) (s-(sizeof(struct sdshdr)));
+    sh->free += sh->len;
+    sh->len = 0;
+    va_list ap;
+    char *t;
+    va_start(ap, fmt);
+    t = sdscatvprintf(s,fmt,ap);
+    va_end(ap);
+    return t;
+}
+
 sds sdstrim(sds s, const char *cset) {
     struct sdshdr *sh = (void*) (s-(sizeof(struct sdshdr)));
     char *start, *end, *sp, *ep;
@@ -427,7 +451,7 @@ sds sdscatrepr(sds s, const char *p, size_t len) {
         case '\a': s = sdscatlen(s,"\\a",2); break;
         case '\b': s = sdscatlen(s,"\\b",2); break;
         default:
-            if (isprint(*p))
+            if (cisprint(*p))
                 s = sdscatprintf(s,"%c",*p);
             else
                 s = sdscatprintf(s,"\\x%02x",(unsigned char)*p);

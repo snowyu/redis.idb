@@ -32,6 +32,7 @@
 #define __SDS_H
 
 #define SDS_MAX_PREALLOC (1024*1024)
+#define SDSFreeAndNil(s) do {sdsfree(s); s = NULL;} while (0)
 
 #include <sys/types.h>
 #include <stdarg.h>
@@ -72,8 +73,11 @@ sds sdscatvprintf(sds s, const char *fmt, va_list ap);
 #ifdef __GNUC__
 sds sdscatprintf(sds s, const char *fmt, ...)
     __attribute__((format(printf, 2, 3)));
+sds sdsprintf(sds s, const char *fmt, ...)
+    __attribute__((format(printf, 2, 3)));
 #else
 sds sdscatprintf(sds s, const char *fmt, ...);
+sds sdsprintf(sds s, const char *fmt, ...);
 #endif
 
 sds sdstrim(sds s, const char *cset);
@@ -95,5 +99,26 @@ sds sdsMakeRoomFor(sds s, size_t addlen);
 void sdsIncrLen(sds s, int incr);
 sds sdsRemoveFreeSpace(sds s);
 size_t sdsAllocSize(sds s);
+
+static inline sds sdsSetlen(const sds s, int len) {
+    sds result = s;
+    struct sdshdr *sh = (void*)(s-(sizeof(struct sdshdr)));
+    int incr = len - sh->len;
+    if (incr > sh->free) result = sdsMakeRoomFor(s, incr);
+    sdsIncrLen(s, incr);
+    return result;
+}
+
+static inline sds sdsSetlen_(const sds s, int len) {
+    sds result = s;
+    struct sdshdr *sh = (void*)(s-(sizeof(struct sdshdr)));
+    if (len != sh->len && len <= (sh->free+sh->len)) {
+        //int incr = len - sh->len;
+        sh->free -= len - sh->len;
+        sh->len = len;
+        result[sh->len] = '\0';
+    }
+    return result;
+}
 
 #endif

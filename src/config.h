@@ -30,24 +30,10 @@
 #ifndef __CONFIG_H
 #define __CONFIG_H
 
-#define HAVE_UNISTD_H  1
-
 #define STORE_IN_FILE  1
 #define STORE_IN_XATTR 2
 #define STORE_IN_FILE_BIT  0 //the 0 bit
 #define STORE_IN_XATTR_BIT 1 //the 1 bit
-
-/* a=target variable, b=bit number to act upon 0-n */
-#define BIT_SET(a,b) ((a) |= (1<<(b)))
-#define BIT_CLEAR(a,b) ((a) &= ~(1<<(b)))
-#define BIT_FLIP(a,b) ((a) ^= (1<<(b)))
-#define BIT_CHECK(a,b) ((a) & (1<<(b)))
-
-/* x=target variable, y=mask */
-#define BITMASK_SET(x,y) ((x) |= (y))
-#define BITMASK_CLEAR(x,y) ((x) &= (~(y)))
-#define BITMASK_FLIP(x,y) ((x) ^= (y))
-#define BITMASK_CHECK(x,y) ((x) & (y))
 
 #ifdef __APPLE__
 #include <AvailabilityMacros.h>
