@@ -31,7 +31,7 @@
 
 #include <signal.h>
 #include <ctype.h>
-#include "idb_helpers.h"
+#include "../deps/idb/src/idb_helpers.h"
 
 void slotToKeyAdd(robj *key);
 void slotToKeyDel(robj *key);
@@ -334,10 +334,43 @@ void keysCommand(redisClient *c) {
         }
     }
     dictReleaseIterator(di);
-    sds s = sdsnew(NULL);
-    s = sdscatprintf(s, "keys.argc=%d, dict.size=%d", c->argc, dictSize(c->db->dict));
-    robj *t = createStringObject(s,sdslen(s));
-    addReplyBulk(c,t);numkeys++;
+    //sds s = sdsnew(NULL);
+    //s = sdscatprintf(s, "keys.argc=%d, dict.size=%d", c->argc, dictSize(c->db->dict));
+    //robj *t = createStringObject(s,sdslen(s));
+    //addReplyBulk(c,t);numkeys++;
+    setDeferredMultiBulkLength(c,replylen,numkeys);
+}
+
+void subkeysCommand(redisClient *c) {
+    sds vKeyPath = c->argv[1]->ptr;
+    sds vPattern = c->argv[2]->ptr;
+    long vSkipCount, vCount;
+    if (getLongFromObjectOrReply(c, c->argv[3], &vSkipCount, NULL) != REDIS_OK) return;
+    if (getLongFromObjectOrReply(c, c->argv[4], &vCount, NULL) != REDIS_OK) return;
+
+    unsigned long numkeys = 0;
+    void *replylen = addDeferredMultiBulkLength(c);
+
+    vPattern = (vPattern[0] == '*' && vPattern[1] == '\0') || vPattern[0] == '\0' ? NULL : vPattern;
+    dStringArray *vResult = iSubkeys(server.storePath, vKeyPath, sdslen(vKeyPath), vPattern,
+        vSkipCount, vCount);
+    if (vResult) {
+        sds *vItem;
+        robj *vObj;
+        darray_foreach(vItem, *vResult) {
+            fprintf(stderr, "got:%s\n", *vItem);
+            vObj = createObject(REDIS_STRING, *vItem);
+                addReplyBulk(c,vObj);
+                numkeys++;
+            decrRefCount(vObj);
+        }
+        darray_free(*vResult);
+        zfree(vResult);
+    }
+//    sds s = sdsnew(NULL);
+//    s = sdscatprintf(s, "keys.argc=%d, dict.size=%lu", c->argc, dictSize(c->db->dict));
+//    robj *t = createStringObject(s,sdslen(s));
+//    addReplyBulk(c,t);numkeys++;
     setDeferredMultiBulkLength(c,replylen,numkeys);
 }
 
