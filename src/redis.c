@@ -30,6 +30,7 @@
 #include "redis.h"
 #include "slowlog.h"
 #include "bio.h"
+#include "idb_helpers.h"
 
 #include <time.h>
 #include <signal.h>

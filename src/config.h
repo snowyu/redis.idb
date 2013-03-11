@@ -30,11 +30,6 @@
 #ifndef __CONFIG_H
 #define __CONFIG_H
 
-#define STORE_IN_FILE  1
-#define STORE_IN_XATTR 2
-#define STORE_IN_FILE_BIT  0 //the 0 bit
-#define STORE_IN_XATTR_BIT 1 //the 1 bit
-
 #ifdef __APPLE__
 #include <AvailabilityMacros.h>
 #endif
