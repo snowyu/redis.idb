@@ -37,6 +37,23 @@ void slotToKeyAdd(robj *key);
 void slotToKeyDel(robj *key);
 void slotToKeyFlush(void);
 
+static inline int rdbWriteRaw(rio *rdb, void *p, size_t len) {
+    if (rdb && rioWrite(rdb,p,len) == 0)
+        return -1;
+    return len;
+}
+
+static inline int rdbSaveMillisecondTime(rio *rdb, long long t) {
+    int64_t t64 = (int64_t) t;
+    return rdbWriteRaw(rdb,&t64,8);
+}
+
+static inline long long rdbLoadMillisecondTime(rio *rdb) {
+    int64_t t64;
+    if (rioRead(rdb,&t64,8) == 0) return -1;
+    return (long long)t64;
+}
+
 /*-----------------------------------------------------------------------------
  * C-level DB API
  *----------------------------------------------------------------------------*/
@@ -49,19 +66,36 @@ robj *lookupKey(redisDb *db, robj *key) {
         if (vValueBuffer) {
             rio vRedisIO;
             rioInitWithBuffer(&vRedisIO,vValueBuffer);
-            int vType =rdbLoadObjectType(&vRedisIO);
+            int vType =rdbLoadType(&vRedisIO);
             robj *o = NULL;
             if (vType != -1) {
-                o = rdbLoadObject(vType, &vRedisIO);
-                if (o) {
-                    //robj *o = createObject(REDIS_STRING,vValue);
-                    //dbAdd(db, key, o);
-                    sds copy = sdsdup(key->ptr);
-                    int retval = dictAdd(db->dict, copy, o);
-                    de = dictFind(db->dict,key->ptr);
+                int vExpired = 0;
+                long long vExpiredTime = -1;
+                if (vType == REDIS_RDB_OPCODE_EXPIRETIME_MS) {
+                    long long now = mstime();
+                    vExpiredTime = rdbLoadMillisecondTime(&vRedisIO);
+                    //-1 means load MSecTime error
+                    vExpired = vExpiredTime == -1 || vExpiredTime < now;
+                }
+                if (!vExpired) {
+                    o = rdbLoadObject(vType, &vRedisIO);
+                    if (o) {
+                        //robj *o = createObject(REDIS_STRING,vValue);
+                        //dbAdd(db, key, o);
+                        sds copy = sdsdup(key->ptr);
+                        int retval = dictAdd(db->dict, copy, o);
+                        de = dictFind(db->dict,key->ptr);
+                        if (vExpiredTime != -1) setExpire(db, key, vExpiredTime);
+                    }
+                    else
+                        redisLog(REDIS_WARNING, "(lookupKey) load value is invalid for key: %s\n", (char*)key->ptr);
+                }
+                else if (vExpiredTime != -1){
+                    //remove expired key
+                    iKeyDelete(server.storePath, key->ptr, sdslen(key->ptr));
                 }
                 else
-                    redisLog(REDIS_WARNING, "(lookupKey) load value is invalid for key: %s\n", (char*)key->ptr);
+                    redisLog(REDIS_WARNING, "(lookupKey) load expiredTime is invalid for key: %s\n", (char*)key->ptr);
             }
             else
                 redisLog(REDIS_WARNING, "(lookupKey) load type is invalid for key: %s\n", (char*)key->ptr);
@@ -232,21 +266,29 @@ int selectDb(redisClient *c, int id) {
  *
  * Every time a DB is flushed the function signalFlushDb() is called.
  *----------------------------------------------------------------------------*/
-
 void signalModifiedKey(redisDb *db, robj *key) {
     touchWatchedKey(db,key);
     dictEntry *de = dictFind(db->dict,key->ptr);
     if (de) {
-        robj *val = dictGetVal(de);
-        rio vRedisIO;
-        rioInitWithBuffer(&vRedisIO,sdsempty());
-        redisAssert(rdbSaveObjectType(&vRedisIO,val));
-        redisAssert(rdbSaveObject(&vRedisIO,val));
-        iPut(server.storePath, key->ptr, sdslen(key->ptr), vRedisIO.io.buffer.ptr, NULL, server.storeType);
-        sds s = sdsnewlen("redis", 5);
-        iPut(server.storePath, key->ptr, sdslen(key->ptr), s, ".type", server.storeType);
-        sdsfree(s);
-        sdsfree(vRedisIO.io.buffer.ptr);
+        long long now = mstime();
+        long long vExpiredTime = getExpire(db,key);
+        int vExpired = (vExpiredTime != -1 && vExpiredTime < now);
+        if (!vExpired) {
+            robj *val = dictGetVal(de);
+            rio vRedisIO;
+            rioInitWithBuffer(&vRedisIO,sdsempty());
+            if (vExpiredTime != -1) {
+                redisAssert(rdbSaveType(&vRedisIO,REDIS_RDB_OPCODE_EXPIRETIME_MS));
+                redisAssert(rdbSaveMillisecondTime(&vRedisIO,vExpiredTime));
+            }
+            redisAssert(rdbSaveObjectType(&vRedisIO,val));
+            redisAssert(rdbSaveObject(&vRedisIO,val));
+            sds v = vRedisIO.io.buffer.ptr;
+            iPut(server.storePath, key->ptr, sdslen(key->ptr), v, sdslen(v), NULL, server.storeType);
+            iPut(server.storePath, key->ptr, sdslen(key->ptr), "redis", 5, ".type", server.storeType);
+            sdsfree(vRedisIO.io.buffer.ptr);
+            
+        }
     }
     //else { //not found, it's deleted.
     //    iKeyDelete(server.storePath, key->ptr, sdslen(key->ptr));
