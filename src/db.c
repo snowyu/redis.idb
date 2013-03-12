@@ -429,6 +429,7 @@ void subkeysCommand(redisClient *c) {
         long vSkipCount, vCount;
         if (getLongFromObjectOrReply(c, c->argv[3], &vSkipCount, NULL) != REDIS_OK) return;
         if (getLongFromObjectOrReply(c, c->argv[4], &vCount, NULL) != REDIS_OK) return;
+        vCount = (IDBMaxPageCount > 0 && vCount > IDBMaxPageCount) ? IDBMaxPageCount : vCount;
 
         unsigned long numkeys = 0;
         void *replylen = addDeferredMultiBulkLength(c);

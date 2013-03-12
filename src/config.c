@@ -30,6 +30,7 @@
 
 
 #include "redis.h"
+#include "idb_helpers.h"
 
 /*-----------------------------------------------------------------------------
  * Config file parsing
@@ -453,6 +454,8 @@ void loadServerConfigFromString(char *config) {
             server.iDBPath = sdsnew(argv[1]);
         } else if (!strcasecmp(argv[0],"idb-enabled") && argc == 2) {
             server.iDBEnabled = yesnotoi(argv[1]);
+        } else if (!strcasecmp(argv[0],"idb-pagesize") && argc == 2) {
+            IDBMaxPageCount = atoi(argv[1]);
         } else {
             err = "Bad directive or wrong number of arguments"; goto loaderr;
         }
@@ -799,6 +802,9 @@ void configSetCommand(redisClient *c) {
         server.iDBPath = zstrdup(o->ptr);
     } else if (!strcasecmp(c->argv[2]->ptr,"idb-enabled")) {
         server.iDBEnabled = yesnotoi(o->ptr);
+    } else if (!strcasecmp(c->argv[2]->ptr,"idb-pagesize")) {
+        if (getLongLongFromObject(o,&ll) == REDIS_ERR) goto badfmt;
+        IDBMaxPageCount = ll;
     } else {
         addReplyErrorFormat(c,"Unsupported CONFIG parameter: %s",
             (char*)c->argv[2]->ptr);
