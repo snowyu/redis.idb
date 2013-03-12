@@ -442,15 +442,17 @@ void loadServerConfigFromString(char *config) {
                 err = sentinelHandleConfiguration(argv+1,argc-1);
                 if (err) goto loaderr;
             }
-        } else if (!strcasecmp(argv[0],"store-type") && argc == 2) {
-            server.storeType = atoi(argv[1]);
-            if (server.storeType < 0 || server.storeType > 3) {
-                err = "store-Type must be 0(Don't Store), 1(InFile) , 2(InXattr) or 3(Both)";
+        } else if (!strcasecmp(argv[0],"idb-type") && argc == 2) { //deprecated
+            server.iDBType = atoi(argv[1]);
+            if (server.iDBType < 0 || server.iDBType > 3) {
+                err = "idb-Type must be 0(Don't Store), 1(InFile) , 2(InXattr) or 3(Both)";
                 goto loaderr;
             }
-        } else if (!strcasecmp(argv[0],"store-path") && argc == 2) {
-            sdsfree(server.storePath);
-            server.storePath = sdsnew(argv[1]);
+        } else if (!strcasecmp(argv[0],"idb-path") && argc == 2) {
+            sdsfree(server.iDBPath);
+            server.iDBPath = sdsnew(argv[1]);
+        } else if (!strcasecmp(argv[0],"idb-enabled") && argc == 2) {
+            server.iDBEnabled = yesnotoi(argv[1]);
         } else {
             err = "Bad directive or wrong number of arguments"; goto loaderr;
         }
@@ -788,13 +790,15 @@ void configSetCommand(redisClient *c) {
         if (getLongLongFromObject(o,&ll) == REDIS_ERR ||
             ll <= 0) goto badfmt;
         server.slave_priority = ll;
-    } else if (!strcasecmp(c->argv[2]->ptr,"store-type")) {
+    } else if (!strcasecmp(c->argv[2]->ptr,"idb-type")) { //deprecated
         if (getLongLongFromObject(o,&ll) == REDIS_ERR ||
             ll <= 0) goto badfmt;
-        server.storeType = ll;
-    } else if (!strcasecmp(c->argv[2]->ptr,"store-path")) {
-        zfree(server.storePath);
-        server.storePath = zstrdup(o->ptr);
+        server.iDBType = ll;
+    } else if (!strcasecmp(c->argv[2]->ptr,"idb-path")) {
+        zfree(server.iDBPath);
+        server.iDBPath = zstrdup(o->ptr);
+    } else if (!strcasecmp(c->argv[2]->ptr,"idb-enabled")) {
+        server.iDBEnabled = yesnotoi(o->ptr);
     } else {
         addReplyErrorFormat(c,"Unsupported CONFIG parameter: %s",
             (char*)c->argv[2]->ptr);

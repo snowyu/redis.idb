@@ -1302,9 +1302,10 @@ void initServerConfig() {
     server.bug_report_start = 0;
     server.watchdog_period = 0;
 
-    /* Store Style: added by riceball */
-    server.storeType = STORE_IN_FILE;
-    server.storePath = sdsnew("data.idb");
+    /* iDB Store: added by riceball */
+    server.iDBEnabled = 1;
+    server.iDBType = STORE_IN_FILE;
+    server.iDBPath = sdsnew("data.idb");
 }
 
 /* This function will try to raise the max number of open files accordingly to
@@ -1892,7 +1893,7 @@ int prepareForShutdown(int flags) {
         redisLog(REDIS_NOTICE,"Removing the unix socket file.");
         unlink(server.unixsocket); /* don't care if this fails */
     }
-    if (server.storePath) sdsfree(server.storePath);
+    if (server.iDBPath) sdsfree(server.iDBPath);
 
     redisLog(REDIS_WARNING,"Redis is now ready to exit, bye bye...");
     return REDIS_OK;
