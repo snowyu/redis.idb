@@ -456,6 +456,8 @@ void loadServerConfigFromString(char *config) {
             server.iDBEnabled = yesnotoi(argv[1]);
         } else if (!strcasecmp(argv[0],"idb-pagesize") && argc == 2) {
             IDBMaxPageCount = atoi(argv[1]);
+        } else if (!strcasecmp(argv[0],"rdb-enabled") && argc == 2) {
+            server.rdbEnabled = yesnotoi(argv[1]);
         } else {
             err = "Bad directive or wrong number of arguments"; goto loaderr;
         }
@@ -805,6 +807,8 @@ void configSetCommand(redisClient *c) {
     } else if (!strcasecmp(c->argv[2]->ptr,"idb-pagesize")) {
         if (getLongLongFromObject(o,&ll) == REDIS_ERR) goto badfmt;
         IDBMaxPageCount = ll;
+    } else if (!strcasecmp(c->argv[2]->ptr,"rdb-enabled")) {
+        server.rdbEnabled = yesnotoi(o->ptr);
     } else {
         addReplyErrorFormat(c,"Unsupported CONFIG parameter: %s",
             (char*)c->argv[2]->ptr);

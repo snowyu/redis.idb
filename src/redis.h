@@ -860,6 +860,7 @@ struct redisServer {
     int iDBEnabled;
     int iDBType;        /* set type for STORE_IN_FILE and STORE_IN_XATTR */ //deprecated
     char *iDBPath;      /* path to store the data */
+    int rdbEnabled;     /* enable/disable redis dump file storage. */
 };
 
 typedef struct pubsubPattern {

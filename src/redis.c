@@ -1001,7 +1001,7 @@ int serverCron(struct aeEventLoop *eventLoop, long long id, void *clientData) {
                 server.unixtime-server.lastsave > sp->seconds) {
                 redisLog(REDIS_NOTICE,"%d changes in %d seconds. Saving...",
                     sp->changes, (int)sp->seconds);
-                rdbSaveBackground(server.rdb_filename);
+                if (server.rdbEnabled) rdbSaveBackground(server.rdb_filename);
                 break;
             }
          }
@@ -1306,6 +1306,7 @@ void initServerConfig() {
     server.iDBEnabled = 1;
     server.iDBType = STORE_IN_FILE;
     server.iDBPath = sdsnew("data.idb");
+    server.rdbEnabled = 0;
 }
 
 /* This function will try to raise the max number of open files accordingly to
