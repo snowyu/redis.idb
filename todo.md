@@ -9,8 +9,35 @@ config.c -- the new store-path parameter here
 * dict
   * dictsize(aDict) : get the count of keys in the dict
 
-+ commands
+* + load/save expired info in iDB
+* + remove expired keys in iDB 
+
+* + commands
   * subkeys keyPath pattern skipCount count
+* sdsnewlen(NULL, len):
+  mine(idb) means: reserved free space len for NULL string.
+  redis means: alloc a unknown string with length!
+  now restore it, I added a new sdsalloc func for my requirement,
+* redis data in iDB format(signalModifiedKey/lookupKey in db.c):
+  * .type=redis
+  * .value= 
+        rio vRedisIO;
+        rioInitWithBuffer(&vRedisIO,sdsempty());
+        if (expired) {
+            redisAssert(rdbSaveType(&vRedisIO,REDIS_RDB_OPCODE_EXPIRETIME_MS));
+            redisAssert(rdbSaveMillisecondTime(&vRedisIO,vExpiredTime));
+        }
+        redisAssert(rdbSaveObjectType(&vRedisIO,val));
+        redisAssert(rdbSaveObject(&vRedisIO,val));
+        iPut(server.storePath, key->ptr, sdslen(key->ptr), vRedisIO.io.buffer.ptr, NULL, server.storeType);
+
+the internal pubsub feature can notify key changed:
+
+* notifyKeyspaceEvent(notify.c) 
+  * howto get key do not triggle the events??? so I can use it as iDB save,
+    * It seems that it would triggle events on read!!
+
+
 
 
 Build
