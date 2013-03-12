@@ -44,14 +44,29 @@ void slotToKeyFlush(void);
 robj *lookupKey(redisDb *db, robj *key) {
     dictEntry *de = dictFind(db->dict,key->ptr);
     if (!de) { //try find on storage and cache it
-        //printf("ddd=%d\n", sdslen(key->ptr));
-        sds vValue = iGet(server.storePath, key->ptr, sdslen(key->ptr), NULL, server.storeType);
-        if (vValue) {
-            robj *o = createObject(REDIS_STRING,vValue);
-            //dbAdd(db, key, o);
-            sds copy = sdsdup(key->ptr);
-            int retval = dictAdd(db->dict, copy, o);
-            de = dictFind(db->dict,key->ptr);
+        //printf("lookupKey: %s=%lu\n", (char*)key->ptr, sdslen(key->ptr));
+        sds vValueBuffer = iGet(server.storePath, key->ptr, sdslen(key->ptr), NULL, server.storeType);
+        if (vValueBuffer) {
+            rio vRedisIO;
+            rioInitWithBuffer(&vRedisIO,vValueBuffer);
+            int vType =rdbLoadObjectType(&vRedisIO);
+            robj *o = NULL;
+            if (vType != -1) {
+                o = rdbLoadObject(vType, &vRedisIO);
+                if (o) {
+                    //robj *o = createObject(REDIS_STRING,vValue);
+                    //dbAdd(db, key, o);
+                    sds copy = sdsdup(key->ptr);
+                    int retval = dictAdd(db->dict, copy, o);
+                    de = dictFind(db->dict,key->ptr);
+                }
+                else
+                    redisLog(REDIS_WARNING, "(lookupKey) load value is invalid for key: %s\n", (char*)key->ptr);
+            }
+            else
+                redisLog(REDIS_WARNING, "(lookupKey) load type is invalid for key: %s\n", (char*)key->ptr);
+            //    addReplyErrorFormat(c,"invalid key type on %s", (char*)key->ptr);
+            sdsfree(vValueBuffer);
         }
     }
     if (de) {
@@ -107,7 +122,8 @@ void dbAdd(redisDb *db, robj *key, robj *val) {
 
     redisAssertWithInfo(NULL,key,retval == REDIS_OK);
     if (server.cluster_enabled) slotToKeyAdd(key);
-    iPut(server.storePath, key->ptr, sdslen(key->ptr), val->ptr, NULL, server.storeType);
+    //retval = sdslen(val->ptr);
+    //if (retval) iPut(server.storePath, key->ptr, sdslen(key->ptr), val->ptr, NULL, server.storeType);
  }
 
 /* Overwrite an existing key with a new value. Incrementing the reference
@@ -120,7 +136,7 @@ void dbOverwrite(redisDb *db, robj *key, robj *val) {
 
     redisAssertWithInfo(NULL,key,de != NULL);
     dictReplace(db->dict, key->ptr, val);
-    iPut(server.storePath, key->ptr, sdslen(key->ptr), val->ptr, NULL, server.storeType);
+    //iPut(server.storePath, key->ptr, sdslen(key->ptr), val->ptr, NULL, server.storeType);
 }
 
 /* High level Set operation. This function can be used in order to set
@@ -143,7 +159,8 @@ void setKey(redisDb *db, robj *key, robj *val) {
 int dbExists(redisDb *db, robj *key) {
     int result = dictFind(db->dict,key->ptr) != NULL;
     if (!result) {
-        result = iIsExists(server.storePath, key->ptr, sdslen(key->ptr), NULL, server.storeType);
+        //result = iIsExists(server.storePath, key->ptr, sdslen(key->ptr), NULL, server.storeType);
+        result = iKeyIsExists(server.storePath, key->ptr, sdslen(key->ptr));
     }
     return result;
 }
@@ -218,6 +235,22 @@ int selectDb(redisClient *c, int id) {
 
 void signalModifiedKey(redisDb *db, robj *key) {
     touchWatchedKey(db,key);
+    dictEntry *de = dictFind(db->dict,key->ptr);
+    if (de) {
+        robj *val = dictGetVal(de);
+        rio vRedisIO;
+        rioInitWithBuffer(&vRedisIO,sdsempty());
+        redisAssert(rdbSaveObjectType(&vRedisIO,val));
+        redisAssert(rdbSaveObject(&vRedisIO,val));
+        iPut(server.storePath, key->ptr, sdslen(key->ptr), vRedisIO.io.buffer.ptr, NULL, server.storeType);
+        sds s = sdsnewlen("redis", 5);
+        iPut(server.storePath, key->ptr, sdslen(key->ptr), s, ".type", server.storeType);
+        sdsfree(s);
+        sdsfree(vRedisIO.io.buffer.ptr);
+    }
+    //else { //not found, it's deleted.
+    //    iKeyDelete(server.storePath, key->ptr, sdslen(key->ptr));
+    //}
 }
 
 void signalFlushedDb(int dbid) {
