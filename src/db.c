@@ -59,26 +59,28 @@ static inline long long rdbLoadMillisecondTime(rio *rdb) {
  *----------------------------------------------------------------------------*/
 
 void setKeyOnIDB(redisDb *db, robj *key) {
-    dictEntry *de = dictFind(db->dict,key->ptr);
-    if (de) {
-        long long now = mstime();
-        long long vExpiredTime = getExpire(db,key);
-        int vExpired = (vExpiredTime != -1 && vExpiredTime < now);
-        if (!vExpired) {
-            robj *val = dictGetVal(de);
-            rio vRedisIO;
-            rioInitWithBuffer(&vRedisIO,sdsempty());
-            if (vExpiredTime != -1) {
-                redisAssert(rdbSaveType(&vRedisIO,REDIS_RDB_OPCODE_EXPIRETIME_MS));
-                redisAssert(rdbSaveMillisecondTime(&vRedisIO,vExpiredTime));
+    if (server.iDBEnabled) {
+        dictEntry *de = dictFind(db->dict,key->ptr);
+        if (de) {
+            long long now = mstime();
+            long long vExpiredTime = getExpire(db,key);
+            int vExpired = (vExpiredTime != -1 && vExpiredTime < now);
+            if (!vExpired) {
+                robj *val = dictGetVal(de);
+                rio vRedisIO;
+                rioInitWithBuffer(&vRedisIO,sdsempty());
+                if (vExpiredTime != -1) {
+                    redisAssert(rdbSaveType(&vRedisIO,REDIS_RDB_OPCODE_EXPIRETIME_MS));
+                    redisAssert(rdbSaveMillisecondTime(&vRedisIO,vExpiredTime));
+                }
+                redisAssert(rdbSaveObjectType(&vRedisIO,val));
+                redisAssert(rdbSaveObject(&vRedisIO,val));
+                sds v = vRedisIO.io.buffer.ptr;
+                iPut(server.iDBPath, key->ptr, sdslen(key->ptr), v, sdslen(v), NULL, server.iDBType);
+                iPut(server.iDBPath, key->ptr, sdslen(key->ptr), "redis", 5, ".type", server.iDBType);
+                sdsfree(vRedisIO.io.buffer.ptr);
+                
             }
-            redisAssert(rdbSaveObjectType(&vRedisIO,val));
-            redisAssert(rdbSaveObject(&vRedisIO,val));
-            sds v = vRedisIO.io.buffer.ptr;
-            iPut(server.iDBPath, key->ptr, sdslen(key->ptr), v, sdslen(v), NULL, server.iDBType);
-            iPut(server.iDBPath, key->ptr, sdslen(key->ptr), "redis", 5, ".type", server.iDBType);
-            sdsfree(vRedisIO.io.buffer.ptr);
-            
         }
     }
 }
@@ -87,7 +89,7 @@ void setKeyOnIDB(redisDb *db, robj *key) {
 robj *lookupKeyOnIDB(redisDb *db, robj *key) {
     robj *result = NULL;
     //printf("lookupKeyOnIDB: %s=%lu\n", (char*)key->ptr, sdslen(key->ptr));
-    sds vValueBuffer = iGet(server.iDBPath, key->ptr, sdslen(key->ptr), NULL, server.iDBType);
+    sds vValueBuffer = (server.iDBEnabled) ? iGet(server.iDBPath, key->ptr, sdslen(key->ptr), NULL, server.iDBType) : NULL;
     if (vValueBuffer) {
         rio vRedisIO;
         rioInitWithBuffer(&vRedisIO,vValueBuffer);
@@ -225,8 +227,7 @@ void setKey(redisDb *db, robj *key, robj *val) {
 
 int dbExists(redisDb *db, robj *key) {
     int result = dictFind(db->dict,key->ptr) != NULL;
-    if (!result) {
-        //result = iIsExists(server.iDBPath, key->ptr, sdslen(key->ptr), NULL, server.iDBType);
+    if (!result && server.iDBEnabled) {
         result = iKeyIsExists(server.iDBPath, key->ptr, sdslen(key->ptr));
     }
     return result;
@@ -264,7 +265,7 @@ int dbDelete(redisDb *db, robj *key) {
      * the key, because it is shared with the main dictionary. */
     if (dictSize(db->expires) > 0) dictDelete(db->expires,key->ptr);
     if (dictDelete(db->dict,key->ptr) == DICT_OK) {
-        iKeyDelete(server.iDBPath, key->ptr, sdslen(key->ptr));
+        if (server.iDBEnabled) iKeyDelete(server.iDBPath, key->ptr, sdslen(key->ptr));
         if (server.cluster_enabled) slotToKeyDel(key);
         return 1;
     } else {
@@ -418,44 +419,45 @@ void keysCommand(redisClient *c) {
         }
     }
     dictReleaseIterator(di);
-    //sds s = sdsnew(NULL);
-    //s = sdscatprintf(s, "keys.argc=%d, dict.size=%d", c->argc, dictSize(c->db->dict));
-    //robj *t = createStringObject(s,sdslen(s));
-    //addReplyBulk(c,t);numkeys++;
     setDeferredMultiBulkLength(c,replylen,numkeys);
 }
 
 void subkeysCommand(redisClient *c) {
-    sds vKeyPath = c->argv[1]->ptr;
-    sds vPattern = c->argv[2]->ptr;
-    long vSkipCount, vCount;
-    if (getLongFromObjectOrReply(c, c->argv[3], &vSkipCount, NULL) != REDIS_OK) return;
-    if (getLongFromObjectOrReply(c, c->argv[4], &vCount, NULL) != REDIS_OK) return;
+    if (server.iDBEnabled) {
+        sds vKeyPath = c->argv[1]->ptr;
+        sds vPattern = c->argv[2]->ptr;
+        long vSkipCount, vCount;
+        if (getLongFromObjectOrReply(c, c->argv[3], &vSkipCount, NULL) != REDIS_OK) return;
+        if (getLongFromObjectOrReply(c, c->argv[4], &vCount, NULL) != REDIS_OK) return;
 
-    unsigned long numkeys = 0;
-    void *replylen = addDeferredMultiBulkLength(c);
+        unsigned long numkeys = 0;
+        void *replylen = addDeferredMultiBulkLength(c);
 
-    vPattern = (vPattern[0] == '*' && vPattern[1] == '\0') || vPattern[0] == '\0' ? NULL : vPattern;
-    dStringArray *vResult = iSubkeys(server.iDBPath, vKeyPath, sdslen(vKeyPath), vPattern,
-        vSkipCount, vCount);
-    if (vResult) {
-        sds *vItem;
-        robj *vObj;
-        darray_foreach(vItem, *vResult) {
-            fprintf(stderr, "got:%s\n", *vItem);
-            vObj = createObject(REDIS_STRING, *vItem);
-                addReplyBulk(c,vObj);
-                numkeys++;
-            decrRefCount(vObj);
+        vPattern = (vPattern[0] == '*' && vPattern[1] == '\0') || vPattern[0] == '\0' ? NULL : vPattern;
+        dStringArray *vResult = iSubkeys(server.iDBPath, vKeyPath, sdslen(vKeyPath), vPattern,
+            vSkipCount, vCount);
+        if (vResult) {
+            sds *vItem;
+            robj *vObj;
+            darray_foreach(vItem, *vResult) {
+                fprintf(stderr, "got:%s\n", *vItem);
+                vObj = createObject(REDIS_STRING, *vItem);
+                    addReplyBulk(c,vObj);
+                    numkeys++;
+                decrRefCount(vObj);
+            }
+            darray_free(*vResult);
+            zfree(vResult);
         }
-        darray_free(*vResult);
-        zfree(vResult);
+    //    sds s = sdsnew(NULL);
+    //    s = sdscatprintf(s, "keys.argc=%d, dict.size=%lu", c->argc, dictSize(c->db->dict));
+    //    robj *t = createStringObject(s,sdslen(s));
+    //    addReplyBulk(c,t);numkeys++;
+        setDeferredMultiBulkLength(c,replylen,numkeys);
     }
-//    sds s = sdsnew(NULL);
-//    s = sdscatprintf(s, "keys.argc=%d, dict.size=%lu", c->argc, dictSize(c->db->dict));
-//    robj *t = createStringObject(s,sdslen(s));
-//    addReplyBulk(c,t);numkeys++;
-    setDeferredMultiBulkLength(c,replylen,numkeys);
+    else {
+        addReplyError(c, "the idb is disabled, you should set idb-enabled to yes first on configuration first.");
+    }
 }
 
 void dbsizeCommand(redisClient *c) {
