@@ -837,7 +837,7 @@ void databasesCron(void) {
     /* Perform hash tables rehashing if needed, but only if there are no
      * other processes saving the DB on disk. Otherwise rehashing is bad
      * as will cause a lot of copy-on-write of memory pages. */
-    if (server.rdb_child_pid == -1 && server.aof_child_pid == -1) {
+    if (server.rdb_child_pid == -1 && server.aof_child_pid == -1 && server.idb_child_pid == -1) {
         /* We use global counters so if we stop the computation at a given
          * DB we'll be able to start from the successive in the next
          * cron loop iteration. */
@@ -963,14 +963,14 @@ int serverCron(struct aeEventLoop *eventLoop, long long id, void *clientData) {
 
     /* Start a scheduled AOF rewrite if this was requested by the user while
      * a BGSAVE was in progress. */
-    if (server.rdb_child_pid == -1 && server.aof_child_pid == -1 &&
+    if (server.rdb_child_pid == -1 && server.aof_child_pid == -1 && server.idb_child_pid == -1 &&
         server.aof_rewrite_scheduled)
     {
         rewriteAppendOnlyFileBackground();
     }
 
     /* Check if a background saving or AOF rewrite in progress terminated. */
-    if (server.rdb_child_pid != -1 || server.aof_child_pid != -1) {
+    if (server.rdb_child_pid != -1 || server.aof_child_pid != -1 || server.idb_child_pid != -1) {
         int statloc;
         pid_t pid;
 
@@ -982,6 +982,8 @@ int serverCron(struct aeEventLoop *eventLoop, long long id, void *clientData) {
 
             if (pid == server.rdb_child_pid) {
                 backgroundSaveDoneHandler(exitcode,bysignal);
+            } else if (pid == server.idb_child_pid) {
+                backgroundIDBSaveDoneHandler(exitcode,bysignal);
             } else if (pid == server.aof_child_pid) {
                 backgroundRewriteDoneHandler(exitcode,bysignal);
             } else {
@@ -1002,6 +1004,7 @@ int serverCron(struct aeEventLoop *eventLoop, long long id, void *clientData) {
                 redisLog(REDIS_NOTICE,"%d changes in %d seconds. Saving...",
                     sp->changes, (int)sp->seconds);
                 if (server.rdbEnabled) rdbSaveBackground(server.rdb_filename);
+                if (server.iDBEnabled && !server.iDBSync) iDBSaveBackground();
                 break;
             }
          }
@@ -1009,6 +1012,7 @@ int serverCron(struct aeEventLoop *eventLoop, long long id, void *clientData) {
          /* Trigger an AOF rewrite if needed */
          if (server.rdb_child_pid == -1 &&
              server.aof_child_pid == -1 &&
+             server.idb_child_pid == -1 &&
              server.aof_rewrite_perc &&
              server.aof_current_size > server.aof_rewrite_min_size)
          {
@@ -1307,6 +1311,7 @@ void initServerConfig() {
     server.iDBType = STORE_IN_FILE;
     server.iDBPath = sdsnew("data.idb");
     server.rdbEnabled = 0;
+    server.iDBSync = 1;
 }
 
 /* This function will try to raise the max number of open files accordingly to
@@ -1400,6 +1405,8 @@ void initServer() {
         exit(1);
     }
     for (j = 0; j < server.dbnum; j++) {
+        server.db[j].dirtyKeys = dictCreate(&hashDictType,NULL);
+        server.db[j].dirtyQueue = dictCreate(&hashDictType,NULL);
         server.db[j].dict = dictCreate(&dbDictType,NULL);
         server.db[j].expires = dictCreate(&keyptrDictType,NULL);
         server.db[j].blocking_keys = dictCreate(&keylistDictType,NULL);
@@ -1414,6 +1421,7 @@ void initServer() {
     server.cronloops = 0;
     server.rdb_child_pid = -1;
     server.aof_child_pid = -1;
+    server.idb_child_pid = -1;
     aofRewriteBufferReset();
     server.aof_buf = sdsempty();
     server.lastsave = time(NULL);
@@ -1848,6 +1856,10 @@ int processCommand(redisClient *c) {
 int prepareForShutdown(int flags) {
     int save = flags & REDIS_SHUTDOWN_SAVE;
     int nosave = flags & REDIS_SHUTDOWN_NOSAVE;
+    if (!server.rdbEnabled) {
+        save = 0;
+        nosave = 1;
+    }
 
     redisLog(REDIS_WARNING,"User requested shutdown...");
     /* Kill the saving child if there is a background saving in progress.
@@ -1857,6 +1869,10 @@ int prepareForShutdown(int flags) {
         redisLog(REDIS_WARNING,"There is a child saving an .rdb. Killing it!");
         kill(server.rdb_child_pid,SIGUSR1);
         rdbRemoveTempFile(server.rdb_child_pid);
+    }
+    if (server.idb_child_pid != -1) {
+        redisLog(REDIS_WARNING,"There is a child saving an idb. Killing it!");
+        kill(server.idb_child_pid,SIGUSR1);
     }
     if (server.aof_state != REDIS_AOF_OFF) {
         /* Kill the AOF saving child as the AOF we already have may be longer
@@ -2117,12 +2133,20 @@ sds genRedisInfoString(char *section) {
         info = sdscatprintf(info,
             "# Persistence\r\n"
             "loading:%d\r\n"
+            "rdb_enabled:%d\r\n"
             "rdb_changes_since_last_save:%lld\r\n"
             "rdb_bgsave_in_progress:%d\r\n"
             "rdb_last_save_time:%ld\r\n"
             "rdb_last_bgsave_status:%s\r\n"
             "rdb_last_bgsave_time_sec:%ld\r\n"
             "rdb_current_bgsave_time_sec:%ld\r\n"
+            "idb_enabled:%d\r\n"
+            "idb_bgsave_enabled:%d\r\n"
+            "idb_bgsave_in_progress:%d\r\n"
+            "idb_last_save_time:%ld\r\n"
+            "idb_last_bgsave_status:%s\r\n"
+            "idb_last_bgsave_time_sec:%ld\r\n"
+            "idb_current_bgsave_time_sec:%ld\r\n"
             "aof_enabled:%d\r\n"
             "aof_rewrite_in_progress:%d\r\n"
             "aof_rewrite_scheduled:%d\r\n"
@@ -2130,6 +2154,7 @@ sds genRedisInfoString(char *section) {
             "aof_current_rewrite_time_sec:%ld\r\n"
             "aof_last_bgrewrite_status:%s\r\n",
             server.loading,
+            server.rdbEnabled,
             server.dirty,
             server.rdb_child_pid != -1,
             server.lastsave,
@@ -2137,6 +2162,14 @@ sds genRedisInfoString(char *section) {
             server.rdb_save_time_last,
             (server.rdb_child_pid == -1) ?
                 -1 : time(NULL)-server.rdb_save_time_start,
+            server.iDBEnabled,
+            !server.iDBSync,
+            server.idb_child_pid != -1,
+            server.idb_lastsave,
+            (server.idb_lastbgsave_status == REDIS_OK) ? "ok" : "err",
+            server.idb_save_time_last,
+            (server.idb_child_pid == -1) ?
+                -1 : time(NULL)-server.idb_save_time_start,
             server.aof_state != REDIS_AOF_OFF,
             server.aof_child_pid != -1,
             server.aof_rewrite_scheduled,
@@ -2376,6 +2409,12 @@ sds genRedisInfoString(char *section) {
             vkeys = dictSize(server.db[j].expires);
             if (keys || vkeys) {
                 info = sdscatprintf(info, "db%d:keys=%lld,expires=%lld\r\n",
+                    j, keys, vkeys);
+            }
+            keys = dictSize(server.db[j].dirtyKeys);
+            vkeys = dictSize(server.db[j].dirtyQueue);
+            if (keys || vkeys) {
+                info = sdscatprintf(info, "db%d:dirtyKeys=%lld,directQueue=%lld\r\n",
                     j, keys, vkeys);
             }
         }

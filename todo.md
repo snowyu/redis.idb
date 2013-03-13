@@ -2,6 +2,32 @@ db.c -- redisDb operation functions
 redis.h -- the redisDb struct defined here
 config.c -- the new store-path parameter here
 
+Options
+-------
+
+Only one database supports. the ‘select’ cmd is only for memory cache now.
+
+* idb-enabled: enable/disable iDB storage. (iDBEnabled)
+* idb-path: iDB store path. (iDBPath)
+* idb-sync:  yes or no, write the iDB sync or async. (iDBSync)
+* idb-pagesize: the max page size, pagesize <=0 means allow all keys list once (IDBMaxPageCount)
+* rdb-enabled: enable/disable redis database dump file storage. (rdbEnabled)
+* idb-type: iDB store type. (iDBType) deprecated.
+
+
+
+Internal
+---------
+
+
+* !* renameGenericCommand should be optimal?
+
+* idb-sync
+  * dirtyKeys: dict
+  * dirtyQueue: dict
+
+* db.watched_keys: which clients is watching key.
+    key -> clients
 * redisClient
   * argc means arguments count
   * argv[] from 0 .. argc-1, 0 means self.

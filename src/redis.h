@@ -356,6 +356,8 @@ typedef struct redisDb {
     dict *blocking_keys;        /* Keys with clients waiting for data (BLPOP) */
     dict *ready_keys;           /* Blocked keys that received a PUSH */
     dict *watched_keys;         /* WATCHED keys for MULTI/EXEC CAS */
+    dict *dirtyKeys;            //only available on async write to iDB
+    dict *dirtyQueue;           //only available on async write to iDB
     int id;
 } redisDb;
 
@@ -861,6 +863,13 @@ struct redisServer {
     int iDBType;        /* set type for STORE_IN_FILE and STORE_IN_XATTR */ //deprecated
     char *iDBPath;      /* path to store the data */
     int rdbEnabled;     /* enable/disable redis dump file storage. */
+    int iDBSync;        /* sync write to iDB or async */
+    pid_t idb_child_pid;            /* PID of iDB saving child */
+    time_t idb_lastsave;                /* Unix time of last successful save */
+    time_t idb_save_time_last;      /* Time used by last RDB save run. */
+    time_t idb_save_time_start;     /* Current RDB save start time. */
+    int idb_lastbgsave_status;          /* REDIS_OK or REDIS_ERR */
+    long long idb_dirty_before_bgsave;  /* Used to restore dirty on failed BGSAVE */
 };
 
 typedef struct pubsubPattern {
@@ -962,6 +971,10 @@ extern dictType hashDictType;
 /*-----------------------------------------------------------------------------
  * Functions prototypes
  *----------------------------------------------------------------------------*/
+
+/* iDB */
+int iDBSaveBackground();
+void backgroundIDBSaveDoneHandler(int exitcode, int bysignal);
 
 /* Utils */
 long long ustime(void);

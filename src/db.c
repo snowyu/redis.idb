@@ -58,31 +58,233 @@ static inline long long rdbLoadMillisecondTime(rio *rdb) {
  * C-level DB API
  *----------------------------------------------------------------------------*/
 
-void setKeyOnIDB(redisDb *db, robj *key) {
+/* Save a key-value pair, with expire time, type, key, value.
+ * On error -1 is returned.
+ * On success if the key was actually saved 1 is returned, otherwise 0
+ * is returned (the key was already expired). */
+static int saveKeyValuePairOnIDB(redisDb *db, robj *key, robj *val)
+{
+    long long now = mstime();
+    long long vExpiredTime = getExpire(db,key);
+    int vExpired = (vExpiredTime != -1 && vExpiredTime < now);
+    if (!vExpired) {
+        rio vRedisIO;
+        rioInitWithBuffer(&vRedisIO,sdsempty());
+        vExpired = 1; //store the operation result, default is successful.
+        if (vExpiredTime != -1) {
+            if (rdbSaveType(&vRedisIO,REDIS_RDB_OPCODE_EXPIRETIME_MS) == -1) vExpired = -1;
+            if (rdbSaveMillisecondTime(&vRedisIO,vExpiredTime) == -1) vExpired = -1;
+        }
+        if (rdbSaveObjectType(&vRedisIO,val) == -1) vExpired = -1;
+        if (rdbSaveObject(&vRedisIO,val) == -1) vExpired = -1;
+        sds v = vRedisIO.io.buffer.ptr;
+        if (iPut(server.iDBPath, key->ptr, sdslen(key->ptr), v, sdslen(v), NULL, server.iDBType) != 0) vExpired = -1;
+        if (iPut(server.iDBPath, key->ptr, sdslen(key->ptr), "redis", 5, ".type", server.iDBType) != 0) vExpired = -1;
+        sdsfree(v);
+        return vExpired;
+    }
+    else
+        return 0;
+}
+
+static void setKeyOnIDB(redisDb *db, robj *key) {
     if (server.iDBEnabled) {
-        dictEntry *de = dictFind(db->dict,key->ptr);
-        if (de) {
-            long long now = mstime();
-            long long vExpiredTime = getExpire(db,key);
-            int vExpired = (vExpiredTime != -1 && vExpiredTime < now);
-            if (!vExpired) {
+            dictEntry *de = dictFind(db->dict,key->ptr);
+            if (de) {
                 robj *val = dictGetVal(de);
-                rio vRedisIO;
-                rioInitWithBuffer(&vRedisIO,sdsempty());
-                if (vExpiredTime != -1) {
-                    redisAssert(rdbSaveType(&vRedisIO,REDIS_RDB_OPCODE_EXPIRETIME_MS));
-                    redisAssert(rdbSaveMillisecondTime(&vRedisIO,vExpiredTime));
+                if (server.iDBSync) {
+                    if (saveKeyValuePairOnIDB(db, key, val) >= 0) {
+                        server.dirty--;
+                    }
+                    else
+                        redisLog(REDIS_WARNING,"iDB Write error saving key %s on disk", (char*)key->ptr);
+                } else {
+                    dict *d = server.idb_child_pid == -1 ? db->dirtyKeys : db->dirtyQueue;
+                    dictReplace(d, key, val);
+                    incrRefCount(key);
+                    incrRefCount(val);
                 }
-                redisAssert(rdbSaveObjectType(&vRedisIO,val));
-                redisAssert(rdbSaveObject(&vRedisIO,val));
-                sds v = vRedisIO.io.buffer.ptr;
-                iPut(server.iDBPath, key->ptr, sdslen(key->ptr), v, sdslen(v), NULL, server.iDBType);
-                iPut(server.iDBPath, key->ptr, sdslen(key->ptr), "redis", 5, ".type", server.iDBType);
-                sdsfree(vRedisIO.io.buffer.ptr);
-                
+            }
+    }
+}
+
+static inline int deleteOnIDB(redisDb *db, robj *key) {
+    int result = server.iDBEnabled;
+    if (result) {
+        result = iKeyIsExists(server.iDBPath, key->ptr, sdslen(key->ptr));
+        if (result) {
+            if (server.iDBSync) {
+                iKeyDelete(server.iDBPath, key->ptr, sdslen(key->ptr));
+                server.dirty--;
+            }
+            else {
+                dict *d = server.idb_child_pid == -1 ? db->dirtyKeys : db->dirtyQueue;
+                dictReplace(d, key, NULL);
+                incrRefCount(key);
             }
         }
     }
+    return result;
+}
+
+int flushDictToIDB(redisDb *db, dict *d) {
+    dictIterator *di = NULL;
+    dictEntry *de;
+    int vErr = REDIS_OK;
+    if (dictSize(d) != 0) {
+        di = dictGetSafeIterator(d);
+        if (!di) {
+            return REDIS_ERR;
+        }
+        /* Iterate this DB writing every entry */
+        while((de = dictNext(di)) != NULL) {
+            robj *key = dictGetKey(de);
+            robj *o = dictGetVal(de);
+            long long expire;
+            if (o == NULL) {
+                if (!iKeyDelete(server.iDBPath, key->ptr, sdslen(key->ptr))) {
+                    vErr = REDIS_ERR;
+                    break;
+                };
+            }
+            else {
+                if (saveKeyValuePairOnIDB(db,key, o) == -1) {
+                    redisLog(REDIS_WARNING,"iDB Write error saving key %s on disk", (char*)key->ptr);
+                    vErr = REDIS_ERR;
+                    break;
+                }
+            }
+            //dictDelete(d, keystr);// != DICT_OK) {
+            server.dirty--;
+        }
+        dictReleaseIterator(di);
+    }
+    return vErr;
+}
+//flush dirtyKeys and dirtyQueue to iDB
+int flushAllToIDB() {
+    int j;
+    int vErr = REDIS_OK;
+
+    for (j = 0; j < server.dbnum; j++) {
+        redisDb *db = server.db+j;
+        dict *d = db->dirtyKeys;
+        vErr = flushDictToIDB(db, d);
+        if (vErr == REDIS_OK) {
+            dictEmpty(d);
+            d = db->dirtyQueue;
+            vErr = flushDictToIDB(db, d);
+            if (vErr == REDIS_OK) dictEmpty(d);
+        }
+        if (vErr == REDIS_ERR) break;
+    }
+    if (vErr == REDIS_OK) {
+        redisLog(REDIS_NOTICE,"IDB saved on disk");
+        server.idb_lastsave = time(NULL);
+        server.idb_lastbgsave_status = REDIS_OK;
+    }
+    return vErr;
+}
+
+//flush dirty keys to iDB
+int flushToIDB() {
+    int j;
+    int vErr = REDIS_OK;
+
+    for (j = 0; j < server.dbnum; j++) {
+        redisDb *db = server.db+j;
+        dict *d = db->dirtyKeys;
+        if (dictSize(d) == 0) continue;
+        vErr = flushDictToIDB(db, d);
+        if (vErr) break;
+    }
+    if (vErr == REDIS_OK) {
+        redisLog(REDIS_NOTICE,"IDB saved on disk");
+        server.idb_lastsave = time(NULL);
+        server.idb_lastbgsave_status = REDIS_OK;
+    }
+    return vErr;
+}
+
+int iDBSaveBackground()
+{
+    pid_t childpid;
+    long long start;
+
+    if (server.idb_child_pid != -1) return REDIS_ERR;
+
+    server.idb_dirty_before_bgsave = server.dirty;
+
+    start = ustime();
+    if ((childpid = fork()) == 0) {
+        int retval;
+
+        /* Child */
+        if (server.ipfd > 0) close(server.ipfd);
+        if (server.sofd > 0) close(server.sofd);
+        redisSetProcTitle("redis-idb-bgsave");
+        retval = flushToIDB();
+        if (retval == REDIS_OK) {
+            size_t private_dirty = zmalloc_get_private_dirty();
+
+            if (private_dirty) {
+                redisLog(REDIS_NOTICE,
+                    "IDB: %lu MB of memory used by copy-on-write",
+                    private_dirty/(1024*1024));
+            }
+        }
+        exitFromChild((retval == REDIS_OK) ? 0 : 1);
+    } else {
+        /* Parent */
+        server.stat_fork_time = ustime()-start;
+        if (childpid == -1) {
+            redisLog(REDIS_WARNING,"IDB Can't save in background: fork: %s",
+                strerror(errno));
+            return REDIS_ERR;
+        }
+        redisLog(REDIS_NOTICE,"IDB Background saving started by pid %d",childpid);
+        server.idb_save_time_start = time(NULL);
+        server.idb_child_pid = childpid;
+        updateDictResizePolicy();
+        return REDIS_OK;
+    }
+    return REDIS_OK; /* unreached */
+}
+
+/* A background saving child (BGSAVE) terminated its work. Handle this. */
+void backgroundIDBSaveDoneHandler(int exitcode, int bysignal) {
+    if (!bysignal && exitcode == 0) {
+        redisLog(REDIS_NOTICE,
+            "IDB Background saving terminated with success");
+        server.dirty = server.dirty - server.idb_dirty_before_bgsave;
+        server.idb_lastsave = time(NULL);
+        server.idb_lastbgsave_status = REDIS_OK;
+        int j;
+        for (j = 0; j < server.dbnum; j++) {
+            redisDb *db = server.db+j;
+            dict *d = db->dirtyKeys;
+            dictEmpty(d);
+            d = db->dirtyQueue;
+            db->dirtyQueue = db->dirtyKeys;
+            db->dirtyKeys = d;
+        }
+    } else if (!bysignal && exitcode != 0) {
+        redisLog(REDIS_WARNING, "IDB Background saving error");
+        server.idb_lastbgsave_status = REDIS_ERR;
+    } else {
+        redisLog(REDIS_WARNING,
+            "IDB Background saving terminated by signal %d", bysignal);
+        /* SIGUSR1 is whitelisted, so we have a way to kill a child without
+         * tirggering an error conditon. */
+        if (bysignal != SIGUSR1)
+            server.idb_lastbgsave_status = REDIS_ERR;
+    }
+    server.idb_child_pid = -1;
+    server.idb_save_time_last = time(NULL)-server.idb_save_time_start;
+    server.idb_save_time_start = -1;
+    /* Possibly there are slaves waiting for a BGSAVE in order to be served
+     * (the first stage of SYNC is a bulk transfer of dump.rdb) */
+    updateSlavesWaitingBgsave(exitcode == 0 ? REDIS_OK : REDIS_ERR);
 }
 
 //lookup the key on IDB and cache it in the memory if found.
@@ -264,13 +466,11 @@ int dbDelete(redisDb *db, robj *key) {
     /* Deleting an entry from the expires dict will not free the sds of
      * the key, because it is shared with the main dictionary. */
     if (dictSize(db->expires) > 0) dictDelete(db->expires,key->ptr);
-    if (dictDelete(db->dict,key->ptr) == DICT_OK) {
-        if (server.iDBEnabled) iKeyDelete(server.iDBPath, key->ptr, sdslen(key->ptr));
+    int result = dictDelete(db->dict,key->ptr) == DICT_OK;
+    result = deleteOnIDB(db, key) || result;
+    if (result)
         if (server.cluster_enabled) slotToKeyDel(key);
-        return 1;
-    } else {
-        return 0;
-    }
+    return result;
 }
 
 long long emptyDb() {
@@ -331,7 +531,13 @@ void flushallCommand(redisClient *c) {
         kill(server.rdb_child_pid,SIGUSR1);
         rdbRemoveTempFile(server.rdb_child_pid);
     }
-    if (server.saveparamslen > 0) {
+    if (server.iDBEnabled) {
+        if (server.idb_child_pid != -1)
+            kill(server.idb_child_pid,SIGUSR1);
+        if (flushAllToIDB() != REDIS_OK)
+            addReplyError(c, "Flush all on iDB Error");
+    }
+    if (server.saveparamslen > 0 && server.rdbEnabled) {
         /* Normally rdbSave() will reset dirty, but we don't want this here
          * as otherwise FLUSHALL will not be replicated nor put into the AOF. */
         int saved_dirty = server.dirty;
