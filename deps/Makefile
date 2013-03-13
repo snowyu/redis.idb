@@ -79,7 +79,8 @@ jemalloc: .make-prerequisites
 
 idb: .make-prerequisites
 	@printf '%b %b\n' $(MAKECOLOR)MAKE$(ENDCOLOR) $(BINCOLOR)$@$(ENDCOLOR)
-	cd idb/build && cmake && make
+	mkdir idb/build
+	cd idb/build && cmake .. && make
 
 .PHONY: idb
 
