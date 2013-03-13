@@ -95,7 +95,7 @@ typedef struct dictIterator {
 
 /* ------------------------------- Macros ------------------------------------*/
 #define dictFreeVal(d, entry) \
-    if ((d)->type->valDestructor) \
+    if (((entry)->v.val) && (d)->type->valDestructor) \
         (d)->type->valDestructor((d)->privdata, (entry)->v.val)
 
 #define dictSetVal(d, entry, _val_) do { \
@@ -112,7 +112,7 @@ typedef struct dictIterator {
     do { entry->v.u64 = _val_; } while(0)
 
 #define dictFreeKey(d, entry) \
-    if ((d)->type->keyDestructor) \
+    if (((entry)->key) && (d)->type->keyDestructor) \
         (d)->type->keyDestructor((d)->privdata, (entry)->key)
 
 #define dictSetKey(d, entry, _key_) do { \
