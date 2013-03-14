@@ -1,0 +1,3 @@
+[submodule "deps/idb"]
+	path = deps/idb
+	url = https://github.com/snowyu/idb.c.git
