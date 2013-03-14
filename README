@@ -1,3 +1,73 @@
+Redis with iDB Storage
+======================
+
+
+The branch adds a new [iDB](https://github.com/snowyu/idb.c) Disk Data Storage to
+replace the original RDB Disk Data Storage.
+
+Disk Data Storage Features Comparison
+-------------------------------------
+
+### RDB Storage
+
+Purpose: Redis is a memcache, but can save the memcache data to disk.
+
+* All save to disk even if it is only a changes occurs.
+* Support Asynchronous saved only.
+* much greater than the memory capacity of the storage will cause problems
+
+### iDB Storage
+
+Purpose: the Key/value Database(Persistent data storage) with a memcache.
+
+* Save changes only, not all.
+* Support Synchronous or Asynchronous saved.
+* No problem with large data storage.
+* Support hierarchy key/value, like path of a key.
+* Support subkeys with pagination or not.
+* Support the local partition keys for pagination.
+
+
+Configuration
+-------------
+
+the new options added to redis.conf:
+
+    # enable/disable iDB storage
+    idb-enabled yes
+    # the store path for iDB
+    idb-path ./my.idb
+    # the max page size for idb
+    # 0 means do not enable the pagination(partition key).
+    idb-pagesize 0
+    # enable/disable sync write or async write on background.
+    idb-sync no
+    # enabled/disable the redis dump file(rdb) storage.
+    rdb-enabled no
+
+Donot forget these options:
+
+    #maybe u wanna limit the memory
+    maxmemory 512mb
+    #it's cache only now, so just remove any key accordingly to the LRU algorith
+    maxmemory-policy allkeys-lru
+
+Todo
+-----
+
+* List, Set, Hash items should treat as subkey when saving to disk.
+  * Or if items is very large to do so.
+* Exchange value should be as an atomic operation?
+  * I use two dicts to keep the changed keys, one is dirtyKeys, another is dirtyQueue. (if asynchronous is enabled.)
+  * modifies will be added to dirtyKeys if no saving.
+  * any modifies will be added to dirtyQueue when saving occurs.
+  * the dirtyKeys will be empty and swap them(dirtyQueue, dirtyKeys) after saving
+  * maybe it is no problem, after all redis is single thread.
+
+Redis
+=====
+
+
 Where to find complete Redis documentation?
 -------------------------------------------
 
