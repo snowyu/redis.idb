@@ -3,7 +3,8 @@ Redis with iDB Storage
 
 
 The branch adds a new [iDB](https://github.com/snowyu/idb.c) Disk Data Storage to
-replace the original RDB Disk Data Storage.
+redis. You can use the redis as database storage with iDB. And iDB can be used to
+replace the original RDB Disk Data Storage too.
 
 Disk Data Storage Features Comparison
 -------------------------------------
