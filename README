@@ -65,6 +65,12 @@ New commands list here:
   * eg, subkeys "" "" 0 0, will return all the keys in the iDB.
   * Note: keys command only return all keys in the memory cache.
 
+Build
+------
+
+before building, you need ensure cmake installed, and run
+
+    git submodule update --init --recursive
 
 Todo
 -----
