@@ -446,7 +446,9 @@ void setKey(redisDb *db, robj *key, robj *val) {
 int dbExists(redisDb *db, robj *key) {
     int result = dictFind(db->dict,key->ptr) != NULL;
     if (!result && server.iDBEnabled) {
-        result = iKeyIsExists(server.iDBPath, key->ptr, sdslen(key->ptr));
+        sds vKey = getKeyNameOnIDB(db->id, key->ptr);
+        result = iKeyIsExists(server.iDBPath, vKey, sdslen(vKey));
+        if (db->id != 0) sdsfree(vKey);
     }
     return result;
 }
