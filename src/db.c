@@ -54,6 +54,14 @@ static inline long long rdbLoadMillisecondTime(rio *rdb) {
     return (long long)t64;
 }
 
+static inline sds getKeyNameOnIDB(int dbId, sds key) {
+    sds result = key;
+    if (dbId != 0) {
+        result = sdsempty();
+        result = sdscatprintf(result, "%d%c%s", dbId, PATH_SEP, key);
+    }
+    return result;
+}
 /*-----------------------------------------------------------------------------
  * C-level DB API
  *----------------------------------------------------------------------------*/
@@ -78,8 +86,10 @@ static int saveKeyValuePairOnIDB(redisDb *db, robj *key, robj *val)
         if (rdbSaveObjectType(&vRedisIO,val) == -1) vExpired = -1;
         if (rdbSaveObject(&vRedisIO,val) == -1) vExpired = -1;
         sds v = vRedisIO.io.buffer.ptr;
-        if (iPut(server.iDBPath, key->ptr, sdslen(key->ptr), v, sdslen(v), NULL, server.iDBType) != 0) vExpired = -1;
-        if (iPut(server.iDBPath, key->ptr, sdslen(key->ptr), "redis", 5, ".type", server.iDBType) != 0) vExpired = -1;
+        sds vKey = getKeyNameOnIDB(db->id, key->ptr);
+        if (iPut(server.iDBPath, vKey, sdslen(vKey), v, sdslen(v), NULL, server.iDBType) != 0) vExpired = -1;
+        if (iPut(server.iDBPath, vKey, sdslen(vKey), "redis", 5, ".type", server.iDBType) != 0) vExpired = -1;
+        if (db->id != 0) sdsfree(vKey);
         sdsfree(v);
         return vExpired;
     }
@@ -111,10 +121,11 @@ static void setKeyOnIDB(redisDb *db, robj *key) {
 static inline int deleteOnIDB(redisDb *db, robj *key) {
     int result = server.iDBEnabled;
     if (result) {
-        result = iKeyIsExists(server.iDBPath, key->ptr, sdslen(key->ptr));
+        sds vKey = getKeyNameOnIDB(db->id, key->ptr);
+        result = iKeyIsExists(server.iDBPath, vKey, sdslen(vKey));
         if (result) {
             if (server.iDBSync) {
-                iKeyDelete(server.iDBPath, key->ptr, sdslen(key->ptr));
+                iKeyDelete(server.iDBPath, vKey, sdslen(vKey));
                 server.dirty--;
             }
             else {
@@ -123,6 +134,7 @@ static inline int deleteOnIDB(redisDb *db, robj *key) {
                 incrRefCount(key);
             }
         }
+        if (db->id != 0) sdsfree(vKey);
     }
     return result;
 }
@@ -291,49 +303,53 @@ void backgroundIDBSaveDoneHandler(int exitcode, int bysignal) {
 robj *lookupKeyOnIDB(redisDb *db, robj *key) {
     robj *result = NULL;
     //printf("lookupKeyOnIDB: %s=%lu\n", (char*)key->ptr, sdslen(key->ptr));
-    sds vValueBuffer = (server.iDBEnabled) ? iGet(server.iDBPath, key->ptr, sdslen(key->ptr), NULL, server.iDBType) : NULL;
-    if (vValueBuffer) {
-        rio vRedisIO;
-        rioInitWithBuffer(&vRedisIO,vValueBuffer);
-        int vType =rdbLoadType(&vRedisIO);
-        if (vType != -1) {
-            int vExpired = 0;
-            long long vExpiredTime = -1;
-            if (vType == REDIS_RDB_OPCODE_EXPIRETIME_MS) {
-                long long now = mstime();
-                vExpiredTime = rdbLoadMillisecondTime(&vRedisIO);
-                //-1 means load MSecTime error
-                vExpired = vExpiredTime == -1 || vExpiredTime < now;
-            }
-            if (!vExpired) {
-                result = rdbLoadObject(vType, &vRedisIO);
-                if (result) {
-                    //robj *o = createObject(REDIS_STRING,vValue);
-                    //dbAdd(db, key, o);
-                    sds copy = sdsdup(key->ptr);
-                    int retval = dictAdd(db->dict, copy, result);
-                    redisAssertWithInfo(NULL,key,retval == REDIS_OK);
-                    if (vExpiredTime != -1) setExpire(db, key, vExpiredTime);
-                    /* Update the access time for the ageing algorithm.
-                     * Don't do it if we have a saving child, as this will trigger
-                     * a copy on write madness. */
-                    if (server.rdb_child_pid == -1 && server.aof_child_pid == -1)
-                        result->lru = server.lruclock;
+    if (server.iDBEnabled) {
+        sds vKey = getKeyNameOnIDB(db->id, key->ptr);
+        sds vValueBuffer = iGet(server.iDBPath, vKey, sdslen(vKey), NULL, server.iDBType);
+        if (db->id != 0) sdsfree(vKey);
+        if (vValueBuffer) {
+            rio vRedisIO;
+            rioInitWithBuffer(&vRedisIO,vValueBuffer);
+            int vType =rdbLoadType(&vRedisIO);
+            if (vType != -1) {
+                int vExpired = 0;
+                long long vExpiredTime = -1;
+                if (vType == REDIS_RDB_OPCODE_EXPIRETIME_MS) {
+                    long long now = mstime();
+                    vExpiredTime = rdbLoadMillisecondTime(&vRedisIO);
+                    //-1 means load MSecTime error
+                    vExpired = vExpiredTime == -1 || vExpiredTime < now;
+                }
+                if (!vExpired) {
+                    result = rdbLoadObject(vType, &vRedisIO);
+                    if (result) {
+                        //robj *o = createObject(REDIS_STRING,vValue);
+                        //dbAdd(db, key, o);
+                        sds copy = sdsdup(key->ptr);
+                        int retval = dictAdd(db->dict, copy, result);
+                        redisAssertWithInfo(NULL,key,retval == REDIS_OK);
+                        if (vExpiredTime != -1) setExpire(db, key, vExpiredTime);
+                        /* Update the access time for the ageing algorithm.
+                         * Don't do it if we have a saving child, as this will trigger
+                         * a copy on write madness. */
+                        if (server.rdb_child_pid == -1 && server.aof_child_pid == -1)
+                            result->lru = server.lruclock;
+                    }
+                    else
+                        redisLog(REDIS_WARNING, "(lookupKeyOnIDB) load value is invalid for key: %s\n", (char*)key->ptr);
+                }
+                else if (vExpiredTime != -1){
+                    //remove expired key
+                    iKeyDelete(server.iDBPath, key->ptr, sdslen(key->ptr));
                 }
                 else
-                    redisLog(REDIS_WARNING, "(lookupKeyOnIDB) load value is invalid for key: %s\n", (char*)key->ptr);
-            }
-            else if (vExpiredTime != -1){
-                //remove expired key
-                iKeyDelete(server.iDBPath, key->ptr, sdslen(key->ptr));
+                    redisLog(REDIS_WARNING, "(lookupKeyOnIDB) load expiredTime is invalid for key: %s\n", (char*)key->ptr);
             }
             else
-                redisLog(REDIS_WARNING, "(lookupKeyOnIDB) load expiredTime is invalid for key: %s\n", (char*)key->ptr);
+                redisLog(REDIS_WARNING, "(lookupKeyOnIDB) load type is invalid for key: %s\n", (char*)key->ptr);
+            //    addReplyErrorFormat(c,"invalid key type on %s", (char*)key->ptr);
+            sdsfree(vValueBuffer);
         }
-        else
-            redisLog(REDIS_WARNING, "(lookupKeyOnIDB) load type is invalid for key: %s\n", (char*)key->ptr);
-        //    addReplyErrorFormat(c,"invalid key type on %s", (char*)key->ptr);
-        sdsfree(vValueBuffer);
     }
     return result;
 }

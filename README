@@ -54,6 +54,12 @@ Donot forget these options:
     maxmemory-policy allkeys-lru
 
 
+The database 0 means default and root database in iDB.
+The others database number can be visited in the default database(just keep compatibility):
+
+    get 1/KeyName  #get KeyName in the database 1.
+    get 2/KeyName  #get KeyName in the database 2.
+
 Commands
 --------
 
