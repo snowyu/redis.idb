@@ -47,10 +47,24 @@ the new options added to redis.conf:
 
 Donot forget these options:
 
-    #maybe u wanna limit the memory
+    #maybe u wanna limit the memory cache size:
     maxmemory 512mb
-    #it's cache only now, so just remove any key accordingly to the LRU algorith
+    #it's a cache only now, so just remove any key accordingly to the LRU algorith
     maxmemory-policy allkeys-lru
+
+
+Commands
+--------
+
+New commands list here:
+
+* subkeys KeyPath subkeysPattern skipCount Count
+  * the subkeys will iterate all matched subkeys in the keyPath for iDB.
+  * skipCount: skip the count of matched subkeys before.
+  * count: return the count of matched subkeys. it should be less than or equ idb-pagesize(if idb-pagesize enabled).
+  * eg, subkeys "" "" 0 0, will return all the keys in the iDB.
+  * Note: keys command only return all keys in the memory cache.
+
 
 Todo
 -----
