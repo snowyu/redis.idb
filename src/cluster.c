@@ -40,6 +40,7 @@ void clusterAcceptHandler(aeEventLoop *el, int fd, void *privdata, int mask);
 void clusterReadHandler(aeEventLoop *el, int fd, void *privdata, int mask);
 void clusterSendPing(clusterLink *link, int type);
 void clusterSendFail(char *nodename);
+void clusterSendFailoverAuthIfNeeded(clusterNode *sender);
 void clusterUpdateState(void);
 int clusterNodeGetSlotBit(clusterNode *n, int slot);
 sds clusterGenNodesDescription(void);
@@ -227,6 +228,8 @@ void clusterInit(void) {
     server.cluster->size = 1;
     server.cluster->nodes = dictCreate(&clusterNodesDictType,NULL);
     server.cluster->node_timeout = 15;
+    server.cluster->failover_auth_time = 0;
+    server.cluster->failover_auth_count = 0;
     memset(server.cluster->migrating_slots_to,0,
         sizeof(server.cluster->migrating_slots_to));
     memset(server.cluster->importing_slots_from,0,
@@ -779,19 +782,22 @@ int clusterProcessPacket(clusterLink *link) {
         explen = sizeof(clusterMsg)-sizeof(union clusterMsgData);
         explen += (sizeof(clusterMsgDataGossip)*count);
         if (totlen != explen) return 1;
-    }
-    if (type == CLUSTERMSG_TYPE_FAIL) {
+    } else if (type == CLUSTERMSG_TYPE_FAIL) {
         uint32_t explen = sizeof(clusterMsg)-sizeof(union clusterMsgData);
 
         explen += sizeof(clusterMsgDataFail);
         if (totlen != explen) return 1;
-    }
-    if (type == CLUSTERMSG_TYPE_PUBLISH) {
+    } else if (type == CLUSTERMSG_TYPE_PUBLISH) {
         uint32_t explen = sizeof(clusterMsg)-sizeof(union clusterMsgData);
 
         explen += sizeof(clusterMsgDataPublish) +
                 ntohl(hdr->data.publish.msg.channel_len) +
                 ntohl(hdr->data.publish.msg.message_len);
+        if (totlen != explen) return 1;
+    } else if (type == CLUSTERMSG_TYPE_FAILOVER_AUTH_REQUEST ||
+               type == CLUSTERMSG_TYPE_FAILOVER_AUTH_ACK) {
+        uint32_t explen = sizeof(clusterMsg)-sizeof(union clusterMsgData);
+
         if (totlen != explen) return 1;
     }
 
@@ -867,6 +873,7 @@ int clusterProcessPacket(clusterLink *link) {
                 return 0;
             }
         }
+
         /* Update our info about the node */
         if (link->node) link->node->pong_received = time(NULL);
 
@@ -958,6 +965,17 @@ int clusterProcessPacket(clusterLink *link) {
             decrRefCount(channel);
             decrRefCount(message);
         }
+    } else if (type == CLUSTERMSG_TYPE_FAILOVER_AUTH_REQUEST) {
+        if (!sender) return 0;  /* We don't know that node. */
+        /* If we are not a master, ignore that message at all. */
+        if (!(server.cluster->myself->flags & REDIS_NODE_MASTER)) return 0;
+        clusterSendFailoverAuthIfNeeded(sender);
+    } else if (type == CLUSTERMSG_TYPE_FAILOVER_AUTH_ACK) {
+        if (!sender) return 0;  /* We don't know that node. */
+        /* If this is a master, increment the number of acknowledges
+         * we received so far. */
+        if (sender->flags & REDIS_NODE_MASTER)
+            server.cluster->failover_auth_count++;
     } else {
         redisLog(REDIS_WARNING,"Received unknown packet type: %d", type);
     }
@@ -1243,6 +1261,118 @@ void clusterPropagatePublish(robj *channel, robj *message) {
 }
 
 /* -----------------------------------------------------------------------------
+ * SLAVE node specific functions
+ * -------------------------------------------------------------------------- */
+
+/* This function sends a FAILOVE_AUTH_REQUEST message to every node in order to
+ * see if there is the quorum for this slave instance to failover its failing
+ * master.
+ *
+ * Note that we send the failover request to everybody, master and slave nodes,
+ * but only the masters are supposed to reply to our query. */
+void clusterRequestFailoverAuth(void) {
+    unsigned char buf[4096];
+    clusterMsg *hdr = (clusterMsg*) buf;
+    uint32_t totlen;
+
+    clusterBuildMessageHdr(hdr,CLUSTERMSG_TYPE_FAILOVER_AUTH_REQUEST);
+    totlen = sizeof(clusterMsg)-sizeof(union clusterMsgData);
+    hdr->totlen = htonl(totlen);
+    clusterBroadcastMessage(buf,totlen);
+}
+
+/* Send a FAILOVER_AUTH_ACK message to the specified node. */
+void clusterSendFailoverAuth(clusterNode *node) {
+    unsigned char buf[4096];
+    clusterMsg *hdr = (clusterMsg*) buf;
+    uint32_t totlen;
+
+    if (!node->link) return;
+    clusterBuildMessageHdr(hdr,CLUSTERMSG_TYPE_FAILOVER_AUTH_ACK);
+    totlen = sizeof(clusterMsg)-sizeof(union clusterMsgData);
+    hdr->totlen = htonl(totlen);
+    clusterSendMessage(node->link,buf,totlen);
+}
+
+/* If we believe 'node' is the "first slave" of it's master, reply with
+ * a FAILOVER_AUTH_GRANTED packet.
+ *
+ * To be a first slave the sender must:
+ * 1) Be a slave.
+ * 2) Its master should be in FAIL state.
+ * 3) Ordering all the slaves IDs for its master by run-id, it should be the
+ *    first (the smallest) among the ones not in FAIL / PFAIL state.
+ */
+void clusterSendFailoverAuthIfNeeded(clusterNode *node) {
+    char first[REDIS_CLUSTER_NAMELEN];
+    clusterNode *master = node->slaveof;
+    int j;
+
+    /* Node is a slave? Its master is down? */
+    if (!(node->flags & REDIS_NODE_SLAVE) ||
+        master == NULL ||
+        !(master->flags & REDIS_NODE_FAIL)) return;
+
+    /* Iterate all the master slaves to check what's the first one. */
+    memset(first,0xff,sizeof(first));
+    for (j = 0; j < master->numslaves; j++) {
+        clusterNode *slave = master->slaves[j];
+
+        if (slave->flags & (REDIS_NODE_FAIL|REDIS_NODE_PFAIL)) continue;
+        if (memcmp(slave->name,first,sizeof(first)) < 0) {
+            memcpy(first,slave->name,sizeof(first));
+        }
+    }
+
+    /* Is 'node' the first slave? */
+    if (memcmp(node->name,first,sizeof(first)) != 0) return;
+
+    /* We can send the packet. */
+    clusterSendFailoverAuth(node);
+}
+
+/* This function is called if we are a slave node and our master serving
+ * a non-zero amount of hash slots is in FAIL state.
+ *
+ * The gaol of this function is:
+ * 1) To check if we are able to perform a failover, is our data updated?
+ * 2) Ask reachable masters the authorization to perform the failover.
+ * 3) Check if there is the majority of masters agreeing we should failover.
+ * 4) Perform the failover informing all the other nodes.
+ */
+void clusterHandleSlaveFailover(void) {
+    time_t data_age = server.unixtime - server.repl_down_since;
+    time_t auth_age = server.unixtime - server.cluster->failover_auth_time;
+    int needed_quorum = (server.cluster->size / 2) + 1;
+
+    /* Check if our data is recent enough. For now we just use a fixed
+     * constant of ten times the node timeout since the cluster should
+     * react much faster to a master down. */
+    if (data_age > server.cluster->node_timeout * 10) return;
+
+    /* TODO: check if we are the first slave as well? Or just rely on the
+     * master authorization? */
+
+    /* Ask masters if we are authorized to perform the failover. If there
+     * is a pending auth request that's too old, reset it. */
+    if (server.cluster->failover_auth_time == 0 || auth_age > 15) {
+        server.cluster->failover_auth_time = time(NULL);
+        server.cluster->failover_auth_count = 0;
+
+        clusterRequestFailoverAuth();
+        return; /* Wait for replies. */
+    }
+
+    /* Check if we reached the quorum. */
+    if (server.cluster->failover_auth_count > needed_quorum) {
+        redisLog(REDIS_WARNING,
+            "Masters quorum reached: failing over my (failing) master.");
+        /* TODO: Perform election. */
+        /* TODO: Broadcast update to cluster. */
+    }
+}
+
+/* -----------------------------------------------------------------------------
  * CLUSTER cron job
  * -------------------------------------------------------------------------- */
 
@@ -1375,6 +1505,16 @@ void clusterCron(void) {
     {
         replicationSetMaster(server.cluster->myself->slaveof->ip,
                              server.cluster->myself->slaveof->port);
+    }
+
+    /* If we are a slave and our master is down, but is serving slots,
+     * call the function that handles the failover. */
+    if (server.cluster->myself->flags & REDIS_NODE_SLAVE &&
+        server.cluster->myself->slaveof &&
+        server.cluster->myself->slaveof->flags & REDIS_NODE_FAIL &&
+        server.cluster->myself->slaveof->numslots != 0)
+    {
+        clusterHandleSlaveFailover();
     }
 
     if (update_state) clusterUpdateState();

@@ -76,7 +76,7 @@
 #define REDIS_CONFIGLINE_MAX    1024
 #define REDIS_EXPIRELOOKUPS_PER_CRON    10 /* lookup 10 expires per loop */
 #define REDIS_EXPIRELOOKUPS_TIME_PERC   25 /* CPU max % for keys collection */
-#define REDIS_DBCRON_DBS_PER_SEC 16
+#define REDIS_DBCRON_DBS_PER_CALL 16
 #define REDIS_MAX_WRITE_PER_EVENT (1024*64)
 #define REDIS_SHARED_SELECT_CMDS 10
 #define REDIS_SHARED_INTEGERS 10000
@@ -581,6 +581,8 @@ typedef struct {
     clusterNode *importing_slots_from[REDIS_CLUSTER_SLOTS];
     clusterNode *slots[REDIS_CLUSTER_SLOTS];
     zskiplist *slots_to_keys;
+    int failover_auth_time;     /* Time at which we sent the AUTH request. */
+    int failover_auth_count;    /* Number of authorizations received. */
 } clusterState;
 
 /* Redis cluster messages header */
@@ -594,6 +596,8 @@ typedef struct {
 #define CLUSTERMSG_TYPE_MEET 2          /* Meet "let's join" message */
 #define CLUSTERMSG_TYPE_FAIL 3          /* Mark node xxx as failing */
 #define CLUSTERMSG_TYPE_PUBLISH 4       /* Pub/Sub Publish propagation */
+#define CLUSTERMSG_TYPE_FAILOVER_AUTH_REQUEST 5 /* May I failover? */
+#define CLUSTERMSG_TYPE_FAILOVER_AUTH_ACK 6     /* Yes, you can failover. */
 
 /* Initially we don't know our "name", but we'll find it once we connect
  * to the first node, using the getsockname() function. Then we'll use this
