@@ -647,7 +647,7 @@ void subkeysCommand(redisClient *c) {
             sds *vItem;
             robj *vObj;
             darray_foreach(vItem, *vResult) {
-                fprintf(stderr, "got:%s\n", *vItem);
+//                fprintf(stderr, "got:%s\n", *vItem);
                 vObj = createObject(REDIS_STRING, *vItem);
                     addReplyBulk(c,vObj);
                     numkeys++;
