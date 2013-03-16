@@ -57,8 +57,13 @@ Donot forget these options:
 The database 0 means default and root database in iDB.
 The others database number can be visited in the default database(just keep compatibility):
 
-    get 1/KeyName  #get KeyName in the database 1.
-    get 2/KeyName  #get KeyName in the database 2.
+    select 1
+    set KeyName 1
+    select 2
+    set KeyName 2
+    select 0
+    get .db1/KeyName  #get KeyName in the database 1.
+    get .db2/KeyName  #get KeyName in the database 2.
 
 Commands
 --------

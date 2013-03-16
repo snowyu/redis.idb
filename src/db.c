@@ -58,7 +58,7 @@ static inline sds getKeyNameOnIDB(int dbId, sds key) {
     sds result = key;
     if (dbId != 0) {
         result = sdsempty();
-        result = sdscatprintf(result, "%d%c%s", dbId, PATH_SEP, key);
+        result = sdscatprintf(result, ".db%d%c%s", dbId, PATH_SEP, key);
     }
     return result;
 }
