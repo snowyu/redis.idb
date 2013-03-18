@@ -1336,7 +1336,7 @@ void initServerConfig() {
     server.watchdog_period = 0;
 
     /* iDB Store: added by riceball */
-    server.iDBEnabled = 1;
+    server.iDBEnabled = 0;
     server.iDBType = STORE_IN_FILE;
     server.iDBPath = sdsnew("data.idb");
     server.rdbEnabled = 0;
