@@ -158,15 +158,14 @@ int flushDictToIDB(redisDb *db, dict *d) {
                     vErr = REDIS_ERR;
                     break;
                 };
-            }
-            else {
+            } else {
                 if (saveKeyValuePairOnIDB(db,key, o) == -1) {
                     redisLog(REDIS_WARNING,"iDB Write error saving key %s on disk", (char*)key->ptr);
                     vErr = REDIS_ERR;
                     break;
                 }
             }
-            //dictDelete(d, keystr);// != DICT_OK) {
+            //dictDelete(d, keystr);// != DICT_OK)
             server.dirty--;
         }
         dictReleaseIterator(di);
@@ -500,6 +499,8 @@ long long emptyDb() {
         dictEmpty(server.db[j].dict);
         dictEmpty(server.db[j].expires);
     }
+    if (server.iDBEnabled)
+        iKeyDelete(server.iDBPath, NULL, 0);
     return removed;
 }
 
