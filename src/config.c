@@ -450,8 +450,8 @@ void loadServerConfigFromString(char *config) {
                 goto loaderr;
             }
         } else if (!strcasecmp(argv[0],"idb-path") && argc == 2) {
-            sdsfree(server.iDBPath);
-            server.iDBPath = sdsnew(argv[1]);
+            //sdsfree(server.iDBPath);
+            server.iDBPath = sdscpy(server.iDBPath, argv[1]);
         } else if (!strcasecmp(argv[0],"idb-enabled") && argc == 2) {
             server.iDBEnabled = yesnotoi(argv[1]);
         } else if (!strcasecmp(argv[0],"idb-sync") && argc == 2) {
@@ -802,8 +802,8 @@ void configSetCommand(redisClient *c) {
             ll <= 0) goto badfmt;
         server.iDBType = ll;
     } else if (!strcasecmp(c->argv[2]->ptr,"idb-path")) {
-        zfree(server.iDBPath);
-        server.iDBPath = zstrdup(o->ptr);
+        //sdsfree(server.iDBPath);
+        server.iDBPath = sdscpy(server.iDBPath, o->ptr);
     } else if (!strcasecmp(c->argv[2]->ptr,"idb-enabled")) {
         server.iDBEnabled = yesnotoi(o->ptr);
     } else if (!strcasecmp(c->argv[2]->ptr,"idb-sync")) {
@@ -868,6 +868,7 @@ void configGetCommand(redisClient *c) {
     config_get_string_field("unixsocket",server.unixsocket);
     config_get_string_field("logfile",server.logfile);
     config_get_string_field("pidfile",server.pidfile);
+    config_get_string_field("idb-path",server.iDBPath);
 
     /* Numerical values */
     config_get_numerical_field("maxmemory",server.maxmemory);
@@ -907,6 +908,7 @@ void configGetCommand(redisClient *c) {
     config_get_numerical_field("watchdog-period",server.watchdog_period);
     config_get_numerical_field("slave-priority",server.slave_priority);
     config_get_numerical_field("hz",server.hz);
+    config_get_numerical_field("idb-pagesize",IDBMaxPageCount);
 
     /* Bool (yes/no) values */
     config_get_bool_field("no-appendfsync-on-rewrite",
@@ -923,6 +925,9 @@ void configGetCommand(redisClient *c) {
     config_get_bool_field("activerehashing", server.activerehashing);
     config_get_bool_field("repl-disable-tcp-nodelay",
             server.repl_disable_tcp_nodelay);
+    config_get_bool_field("idb-enabled", server.iDBEnabled);
+    config_get_bool_field("idb-sync", server.iDBSync);
+    config_get_bool_field("rdb-enabled", server.rdbEnabled);
 
     /* Everything we can't handle with macros follows. */
 
