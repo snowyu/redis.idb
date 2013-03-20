@@ -10,7 +10,7 @@ start_server {
         set tosort {}
         set result {}
         array set seenrand {}
-        r del tosort
+        r del tosort_$cmd
         for {set i 0} {$i < $num} {incr i} {
             # Make sure all the weights are different because
             # Redis does not use a stable sort but Tcl does.
@@ -23,7 +23,7 @@ start_server {
                 if {![info exists seenrand($rint)]} break
             }
             set seenrand($rint) x
-            r $cmd tosort $i
+            r $cmd tosort_$cmd $i
             r set weight_$i $rint
             r hset wobj_$i weight $rint
             lappend tosort [list $i $rint]
@@ -44,36 +44,36 @@ start_server {
         10000 sadd hashtable "Big Hash table"
     } {
         set result [create_random_dataset $num $cmd]
-        assert_encoding $enc tosort
+        assert_encoding $enc tosort_$cmd
 
         test "$title: SORT BY key" {
-            assert_equal $result [r sort tosort BY weight_*]
+            assert_equal $result [r sort tosort_$cmd BY weight_*]
         }
 
         test "$title: SORT BY key with limit" {
-            assert_equal [lrange $result 5 9] [r sort tosort BY weight_* LIMIT 5 5]
+            assert_equal [lrange $result 5 9] [r sort tosort_$cmd BY weight_* LIMIT 5 5]
         }
 
         test "$title: SORT BY hash field" {
-            assert_equal $result [r sort tosort BY wobj_*->weight]
+            assert_equal $result [r sort tosort_$cmd BY wobj_*->weight]
         }
     }
 
     set result [create_random_dataset 16 lpush]
     test "SORT GET #" {
-        assert_equal [lsort -integer $result] [r sort tosort GET #]
+        assert_equal [lsort -integer $result] [r sort tosort_lpush GET #]
     }
 
     test "SORT GET <const>" {
         r del foo
-        set res [r sort tosort GET foo]
+        set res [r sort tosort_lpush GET foo]
         assert_equal 16 [llength $res]
         foreach item $res { assert_equal {} $item }
     }
 
     test "SORT GET (key and hash) with sanity check" {
-        set l1 [r sort tosort GET # GET weight_*]
-        set l2 [r sort tosort GET # GET wobj_*->weight]
+        set l1 [r sort tosort_lpush GET # GET weight_*]
+        set l2 [r sort tosort_lpush GET # GET wobj_*->weight]
         foreach {id1 w1} $l1 {id2 w2} $l2 {
             assert_equal $id1 $id2
             assert_equal $w1 [r get weight_$id1]
@@ -82,21 +82,21 @@ start_server {
     }
 
     test "SORT BY key STORE" {
-        r sort tosort BY weight_* store sort-res
+        r sort tosort_lpush BY weight_* store sort-res
         assert_equal $result [r lrange sort-res 0 -1]
         assert_equal 16 [r llen sort-res]
         assert_encoding ziplist sort-res
     }
 
     test "SORT BY hash field STORE" {
-        r sort tosort BY wobj_*->weight store sort-res
+        r sort tosort_lpush BY wobj_*->weight store sort-res
         assert_equal $result [r lrange sort-res 0 -1]
         assert_equal 16 [r llen sort-res]
         assert_encoding ziplist sort-res
     }
 
     test "SORT DESC" {
-        assert_equal [lsort -decreasing -integer $result] [r sort tosort DESC]
+        assert_equal [lsort -decreasing -integer $result] [r sort tosort_lpush DESC]
     }
 
     test "SORT ALPHA against integer encoded strings" {
@@ -245,7 +245,7 @@ start_server {
         test "SORT speed, $num element list BY key, 100 times" {
             set start [clock clicks -milliseconds]
             for {set i 0} {$i < 100} {incr i} {
-                set sorted [r sort tosort BY weight_* LIMIT 0 10]
+                set sorted [r sort tosort_lpush BY weight_* LIMIT 0 10]
             }
             set elapsed [expr [clock clicks -milliseconds]-$start]
             if {$::verbose} {
@@ -257,7 +257,7 @@ start_server {
         test "SORT speed, $num element list BY hash field, 100 times" {
             set start [clock clicks -milliseconds]
             for {set i 0} {$i < 100} {incr i} {
-                set sorted [r sort tosort BY wobj_*->weight LIMIT 0 10]
+                set sorted [r sort tosort_lpush BY wobj_*->weight LIMIT 0 10]
             }
             set elapsed [expr [clock clicks -milliseconds]-$start]
             if {$::verbose} {
@@ -269,7 +269,7 @@ start_server {
         test "SORT speed, $num element list directly, 100 times" {
             set start [clock clicks -milliseconds]
             for {set i 0} {$i < 100} {incr i} {
-                set sorted [r sort tosort LIMIT 0 10]
+                set sorted [r sort tosort_lpush LIMIT 0 10]
             }
             set elapsed [expr [clock clicks -milliseconds]-$start]
             if {$::verbose} {
@@ -281,7 +281,7 @@ start_server {
         test "SORT speed, $num element list BY <const>, 100 times" {
             set start [clock clicks -milliseconds]
             for {set i 0} {$i < 100} {incr i} {
-                set sorted [r sort tosort BY nokey LIMIT 0 10]
+                set sorted [r sort tosort_lpush BY nokey LIMIT 0 10]
             }
             set elapsed [expr [clock clicks -milliseconds]-$start]
             if {$::verbose} {
