@@ -385,6 +385,23 @@ int dictReplace(dict *d, void *key, void *val)
     return 0;
 }
 
+dictEntry *dictUpdate(dict *d, void *key, void *val)
+{
+    dictEntry *entry, auxentry;
+    entry = dictFind(d, key);
+    if (entry) {
+        /* Set the new value and free the old one. Note that it is important
+         * to do that in this order, as the value may just be exactly the same
+         * as the previous one. In this context, think to reference counting,
+         * you want to increment (set), and then decrement (free), and not the
+         * reverse. */
+        auxentry = *entry;
+        dictSetVal(d, entry, val);
+        dictFreeVal(d, &auxentry);
+    }
+    return entry;
+}
+
 /* dictReplaceRaw() is simply a version of dictAddRaw() that always
  * returns the hash entry of the specified key, even if the key already
  * exists and can't be added (in that case the entry of the already
@@ -670,10 +687,12 @@ static int _dictKeyIndex(dict *d, const void *key)
 }
 
 void dictEmpty(dict *d) {
+    if (dictSize(d)) {
     _dictClear(d,&d->ht[0]);
     _dictClear(d,&d->ht[1]);
     d->rehashidx = -1;
     d->iterators = 0;
+    }
 }
 
 void dictEnableResize(void) {
