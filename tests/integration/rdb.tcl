@@ -3,7 +3,7 @@ set server_path [tmpdir "server.rdb-encoding-test"]
 # Copy RDB with different encodings in server path
 exec cp tests/assets/encodings.rdb $server_path
 
-start_server [list overrides [list "dir" $server_path "dbfilename" "encodings.rdb"]] {
+start_server [list overrides [list "dir" $server_path "dbfilename" "encodings.rdb" "rdb-enabled" "yes"]] {
   test "RDB encoding loading test" {
     r select 0
     csvdump r
@@ -25,7 +25,7 @@ start_server [list overrides [list "dir" $server_path "dbfilename" "encodings.rd
 
 set server_path [tmpdir "server.rdb-startup-test"]
 
-start_server [list overrides [list "dir" $server_path]] {
+start_server [list overrides [list "dir" $server_path "rdb-enabled" "yes"]] {
     test {Server started empty with non-existing RDB file} {
         r debug digest
     } {0000000000000000000000000000000000000000}
@@ -33,7 +33,7 @@ start_server [list overrides [list "dir" $server_path]] {
     r save
 }
 
-start_server [list overrides [list "dir" $server_path]] {
+start_server [list overrides [list "dir" $server_path "rdb-enabled" "yes"]] {
     test {Server started empty with empty RDB file} {
         r debug digest
     } {0000000000000000000000000000000000000000}
@@ -41,7 +41,7 @@ start_server [list overrides [list "dir" $server_path]] {
 
 # Helper function to start a server and kill it, just to check the error
 # logged.
-set defaults {}
+set defaults { rdb-enabled {yes} }
 proc start_server_and_kill_it {overrides code} {
     upvar defaults defaults srv srv server_path server_path
     set config [concat $defaults $overrides]
