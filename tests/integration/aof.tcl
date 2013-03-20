@@ -1,4 +1,4 @@
-set defaults { appendonly {yes} appendfilename {appendonly.aof} }
+set defaults { appendonly {yes} appendfilename {appendonly.aof} idb-enabled {no} }
 set server_path [tmpdir server.aof]
 set aof_path "$server_path/appendonly.aof"
 
