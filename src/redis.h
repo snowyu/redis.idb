@@ -977,6 +977,7 @@ extern dictType hashDictType;
  *----------------------------------------------------------------------------*/
 
 /* iDB */
+int flushAllToIDB(); //save all changes to iDB.
 int iDBSaveBackground();
 void backgroundIDBSaveDoneHandler(int exitcode, int bysignal);
 
