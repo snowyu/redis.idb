@@ -1205,25 +1205,57 @@ void backgroundSaveDoneHandler(int exitcode, int bysignal) {
 }
 
 void saveCommand(redisClient *c) {
-    if (server.rdb_child_pid != -1) {
-        addReplyError(c,"Background save already in progress");
-        return;
+    if (server.rdbEnabled) {
+        if (server.rdb_child_pid != -1) {
+            addReplyError(c,"Background save already in progress");
+            return;
+        }
+        if (rdbSave(server.rdb_filename) == REDIS_OK) {
+            addReply(c,shared.ok);
+        } else {
+            addReply(c,shared.err);
+        }
     }
-    if (rdbSave(server.rdb_filename) == REDIS_OK) {
-        addReply(c,shared.ok);
-    } else {
-        addReply(c,shared.err);
+    if (server.iDBEnabled) {
+        if (server.idb_child_pid != -1) {
+            addReplyError(c,"iDB Background save already in progress");
+            return;
+        }
+        if (flushAllToIDB() == REDIS_OK) {
+            addReply(c,shared.ok);
+        } else {
+            addReplyError(c,"Some errors have happend on iDB saving.");
+        }
+    }
+    if (!server.rdbEnabled && !server.iDBEnabled) {
+        addReplyError(c,"No any storage available, rdb and iDB are both disabled.");
     }
 }
 
 void bgsaveCommand(redisClient *c) {
-    if (server.rdb_child_pid != -1) {
-        addReplyError(c,"Background save already in progress");
-    } else if (server.aof_child_pid != -1) {
-        addReplyError(c,"Can't BGSAVE while AOF log rewriting is in progress");
-    } else if (rdbSaveBackground(server.rdb_filename) == REDIS_OK) {
-        addReplyStatus(c,"Background saving started");
-    } else {
-        addReply(c,shared.err);
+    if (server.rdbEnabled) {
+        if (server.rdb_child_pid != -1) {
+            addReplyError(c,"Background save already in progress");
+        } else if (server.aof_child_pid != -1) {
+            addReplyError(c,"Can't BGSAVE while AOF log rewriting is in progress");
+        } else if (rdbSaveBackground(server.rdb_filename) == REDIS_OK) {
+            addReplyStatus(c,"Background saving started");
+        } else {
+            addReply(c,shared.err);
+        }
+    }
+    if (server.iDBEnabled) {
+        if (server.idb_child_pid != -1) {
+            addReplyError(c,"iDB Background save already in progress");
+        } else if (server.aof_child_pid != -1) {
+            addReplyError(c,"iDB Can't BGSAVE while AOF log rewriting is in progress");
+        } else if (iDBSaveBackground() == REDIS_OK) {
+            addReplyStatus(c,"iDB Background saving started");
+        } else {
+            addReply(c,shared.err);
+        }
+    }
+    if (!server.rdbEnabled && !server.iDBEnabled) {
+        addReplyError(c,"No any storage available, rdb and iDB are both disabled.");
     }
 }
