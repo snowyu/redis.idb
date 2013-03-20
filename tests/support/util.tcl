@@ -48,14 +48,14 @@ proc warnings_from_file {filename} {
 
 # Return value for INFO property
 proc status {r property} {
-    if {[regexp "\r\n$property:(.*?)\r\n" [{*}$r info] _ value]} {
+    if {[regexp "$property:(.*?)\r\n" [{*}$r info] _ value]} {
         set _ $value
     }
 }
 
 proc waitForBgsave r {
     while 1 {
-        if {[status r rdb_bgsave_in_progress] eq 1} {
+        if {[status r db_bgsave_in_progress] eq 1} {
             if {$::verbose} {
                 puts -nonewline "\nWaiting for background save to finish... "
                 flush stdout
