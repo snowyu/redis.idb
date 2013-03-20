@@ -19,9 +19,28 @@ Only one database supports. the ‘select’ cmd is only for memory cache now.
 Internal
 ---------
 
+* !* dbsizeCommand(db.c)
+* !* renameGenericCommand should be optimal
+  * delete and add is not enough.
 
-* !* renameGenericCommand should be optimal?
 
+* redis string object may be store the int. so u must be care of encoding.
+
+          sds s = sdsempty();
+          if (o->type == REDIS_STRING && o->encoding == REDIS_ENCODING_RAW) {
+          size_t len = sdslen(o->ptr);
+          len = len > 10 ? 10: len;
+          s = sdscatrepr(s, o->ptr, len);
+          }
+ 
+
+* aof and replication
+  * startAppendOnly(aof.c) will write all keys in dict to aof file when switching REDIS_AOF_ON
+  * propagate(redis.c) will notify the changes of keys to aof and replication.
+  * aof and replication will notify the changes only when server.dirty != 0 (see call func in redis.c)
+
+        if (dirty)
+            flags |= (REDIS_PROPAGATE_REPL | REDIS_PROPAGATE_AOF);
 * idb-sync
   * dirtyKeys: dict
   * dirtyQueue: dict

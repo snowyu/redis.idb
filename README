@@ -87,6 +87,8 @@ before building, you need ensure cmake installed, and run
 Todo
 -----
 
+* ![Bug] AOF can not work on iDB. because AOF is still use dict(memcache) to save.
+* ![Bug] Replication too.
 * List, Set, Hash items should treat as subkey when saving to disk.
   * Or if items is very large to do so.
 * Exchange value should be as an atomic operation?
