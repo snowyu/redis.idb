@@ -58,9 +58,31 @@ static inline sds getKeyNameOnIDB(int dbId, sds key) {
     sds result = key;
     if (dbId != 0) {
         result = sdsempty();
-        result = sdscatprintf(result, ".db%d%c%s", dbId, PATH_SEP, key);
+        //the sdscatprintf() will print ".db1/(null)" when key is NULL
+        if (key) {
+            result = sdscatprintf(result, ".db%d%c%s", dbId, PATH_SEP, key);
+        } else {
+            result = sdscatprintf(result, ".db%d", dbId);
+        }
     }
     return result;
+}
+
+static inline dictEntry *getDictEntryOnDirtyKeys(redisDb *db, robj *key)
+{
+    dict *d = db->dirtyQueue;
+    dictEntry *de = dictFind(d, key);
+    if (de) {
+        //printf("%s found on dirtyQueue %d\n", key->ptr, dictGetVal(de) == NULL);
+        return de;
+    }
+    d = db->dirtyKeys;
+    de = dictFind(d, key);
+    if (de) {
+        //printf("%s found on dirtyKeys %d\n", key->ptr, dictGetVal(de) == NULL);
+        return de;
+    }
+    return NULL;
 }
 /*-----------------------------------------------------------------------------
  * C-level DB API
@@ -101,18 +123,20 @@ static void setKeyOnIDB(redisDb *db, robj *key) {
     if (server.iDBEnabled) {
             dictEntry *de = dictFind(db->dict,key->ptr);
             if (de) {
+                //redisLog(REDIS_NOTICE, "set a key:%s", key->ptr);
+                //key = dictGetKey(de);
                 robj *val = dictGetVal(de);
                 if (server.iDBSync) {
                     if (saveKeyValuePairOnIDB(db, key, val) >= 0) {
-                        server.dirty--;
+                        //server.dirty--; //that should be a problem for aof writing!!
                     }
                     else
                         redisLog(REDIS_WARNING,"iDB Write error saving key %s on disk", (char*)key->ptr);
                 } else {
                     dict *d = server.idb_child_pid == -1 ? db->dirtyKeys : db->dirtyQueue;
-                    dictReplace(d, key, val);
-                    incrRefCount(key);
                     incrRefCount(val);
+                    if (dictReplace(d, key, val) == 1) //new key
+                        incrRefCount(key);
                 }
             }
     }
@@ -122,18 +146,31 @@ static inline int deleteOnIDB(redisDb *db, robj *key) {
     int result = server.iDBEnabled;
     if (result) {
         sds vKey = getKeyNameOnIDB(db->id, key->ptr);
-        result = iKeyIsExists(server.iDBPath, vKey, sdslen(vKey));
-        if (result) {
-            if (server.iDBSync) {
+        if (server.iDBSync) {
+            //redisLog(REDIS_NOTICE, "Try deleteOnIDB:%s", vKey);
+            result = iKeyIsExists(server.iDBPath, vKey, sdslen(vKey));
+            if (result) {
+                //redisLog(REDIS_NOTICE, "deleted:%s", vKey);
                 iKeyDelete(server.iDBPath, vKey, sdslen(vKey));
-                server.dirty--;
-            }
-            else {
-                dict *d = server.idb_child_pid == -1 ? db->dirtyKeys : db->dirtyQueue;
-                dictReplace(d, key, NULL);
-                incrRefCount(key);
             }
         }
+        else {
+            dict *d = server.idb_child_pid == -1 ? db->dirtyKeys : db->dirtyQueue;
+            result = dictUpdate(d, key, NULL) != NULL;
+            if (!result) { //not found in dirtyKeys
+                d = (d == db->dirtyKeys) ? db->dirtyQueue: db->dirtyKeys;
+                result = dictFind(d, key) != NULL || iKeyIsExists(server.iDBPath, vKey, sdslen(vKey));
+                //if (result) { //in case the key is on writing...., so just added it.
+                    incrRefCount(key);
+                    dictAdd(d, key, NULL);
+                //}
+            }
+            //dictEntry *de = dictFind(d, key);
+            //redisAssertWithInfo(NULL, key, dictGetVal(de) == NULL);
+            //redisLog(REDIS_NOTICE, "deleteOnIDB:%s", key->ptr);
+            //server.dirty++;
+        }
+
         if (db->id != 0) sdsfree(vKey);
     }
     return result;
@@ -175,22 +212,25 @@ int flushDictToIDB(redisDb *db, dict *d) {
 //flush dirtyKeys and dirtyQueue to iDB
 int flushAllToIDB() {
     int j;
+    size_t count = 0;
     int vErr = REDIS_OK;
 
     for (j = 0; j < server.dbnum; j++) {
         redisDb *db = server.db+j;
         dict *d = db->dirtyKeys;
+        count += dictSize(d);
         vErr = flushDictToIDB(db, d);
         if (vErr == REDIS_OK) {
             dictEmpty(d);
             d = db->dirtyQueue;
+            count += dictSize(d);
             vErr = flushDictToIDB(db, d);
             if (vErr == REDIS_OK) dictEmpty(d);
         }
         if (vErr == REDIS_ERR) break;
     }
     if (vErr == REDIS_OK) {
-        redisLog(REDIS_NOTICE,"IDB saved on disk");
+        redisLog(REDIS_NOTICE,"IDB saved %lu on disk", count);
         server.idb_lastsave = time(NULL);
         server.idb_lastbgsave_status = REDIS_OK;
     }
@@ -301,10 +341,28 @@ void backgroundIDBSaveDoneHandler(int exitcode, int bysignal) {
 //lookup the key on IDB and cache it in the memory if found.
 robj *lookupKeyOnIDB(redisDb *db, robj *key) {
     robj *result = NULL;
-    //printf("lookupKeyOnIDB: %s=%lu\n", (char*)key->ptr, sdslen(key->ptr));
+    //printf("lookupKeyOnIDB: %s\n", (char*)key->ptr);
     if (server.iDBEnabled) {
+        if (server.iDBSync == 0) {
+            //dict *d = server.idb_child_pid == -1 ? db->dirtyKeys : db->dirtyQueue;
+            //if (server.idb_child_pid == -1)
+
+            dictEntry *de = getDictEntryOnDirtyKeys(db, key);
+            if (de) {
+                result = dictGetVal(de);
+                if (result) {
+                    sds copy = sdsdup(key->ptr);
+                    int retval = dictAdd(db->dict, copy, result);
+                    redisAssertWithInfo(NULL,key,retval == REDIS_OK);
+                }
+                return result;
+            }
+
+        }
         sds vKey = getKeyNameOnIDB(db->id, key->ptr);
+        //printf("try iGet:%s\n", vKey);
         sds vValueBuffer = iGet(server.iDBPath, vKey, sdslen(vKey), NULL, server.iDBType);
+        //printf("lookupKeyOnIDB Loaded: %s=%s\n", (char*)vKey, vValueBuffer);
         if (db->id != 0) sdsfree(vKey);
         if (vValueBuffer) {
             rio vRedisIO;
@@ -331,7 +389,7 @@ robj *lookupKeyOnIDB(redisDb *db, robj *key) {
                         /* Update the access time for the ageing algorithm.
                          * Don't do it if we have a saving child, as this will trigger
                          * a copy on write madness. */
-                        if (server.rdb_child_pid == -1 && server.aof_child_pid == -1)
+                        if (server.rdb_child_pid == -1 && server.aof_child_pid == -1 && server.idb_child_pid == -1)
                             result->lru = server.lruclock;
                     }
                     else
@@ -361,7 +419,7 @@ robj *lookupKey(redisDb *db, robj *key) {
         /* Update the access time for the ageing algorithm.
          * Don't do it if we have a saving child, as this will trigger
          * a copy on write madness. */
-        if (server.rdb_child_pid == -1 && server.aof_child_pid == -1)
+        if (server.rdb_child_pid == -1 && server.aof_child_pid == -1 && server.idb_child_pid == -1)
             val->lru = server.lruclock;
         return val;
     } else {
@@ -445,6 +503,13 @@ void setKey(redisDb *db, robj *key, robj *val) {
 int dbExists(redisDb *db, robj *key) {
     int result = dictFind(db->dict,key->ptr) != NULL;
     if (!result && server.iDBEnabled) {
+        if (!server.iDBSync) {
+            dictEntry *de = getDictEntryOnDirtyKeys(db, key);
+            if (de) {
+                result = dictGetVal(de) != NULL;
+                return result;
+            }
+        }
         sds vKey = getKeyNameOnIDB(db->id, key->ptr);
         result = iKeyIsExists(server.iDBPath, vKey, sdslen(vKey));
         if (db->id != 0) sdsfree(vKey);
@@ -493,14 +558,23 @@ int dbDelete(redisDb *db, robj *key) {
 long long emptyDb() {
     int j;
     long long removed = 0;
+    //size_t count = 0;
 
     for (j = 0; j < server.dbnum; j++) {
         removed += dictSize(server.db[j].dict);
         dictEmpty(server.db[j].dict);
         dictEmpty(server.db[j].expires);
+        if (server.iDBEnabled) {
+            //count += dictSize(server.db[j].dirtyKeys);
+            //count += dictSize(server.db[j].dirtyQueue);
+            dictEmpty(server.db[j].dirtyKeys);
+            dictEmpty(server.db[j].dirtyQueue);
+        }
     }
-    if (server.iDBEnabled)
+    if (server.iDBEnabled) {
+        //redisLog(REDIS_NOTICE, "emptyDb dirtyKeys:%lu", count);
         iKeyDelete(server.iDBPath, NULL, 0);
+    }
     return removed;
 }
 
@@ -532,12 +606,28 @@ void signalFlushedDb(int dbid) {
  * Type agnostic commands operating on the key space
  *----------------------------------------------------------------------------*/
 
+//flush means emptyDB!!!
+
 void flushdbCommand(redisClient *c) {
     server.dirty += dictSize(c->db->dict);
     signalFlushedDb(c->db->id);
     dictEmpty(c->db->dict);
     dictEmpty(c->db->expires);
     if (server.cluster_enabled) slotToKeyFlush();
+    if (server.iDBEnabled) {
+        if (server.idb_child_pid != -1) {
+            kill(server.idb_child_pid,SIGUSR1);
+        }
+        size_t count = 0;
+        count += dictSize(c->db->dirtyKeys);
+        count += dictSize(c->db->dirtyQueue);
+        dictEmpty(c->db->dirtyKeys);
+        dictEmpty(c->db->dirtyQueue);
+        sds vKey = getKeyNameOnIDB(c->db->id, NULL);
+        int result = iKeyDelete(server.iDBPath, vKey, sdslen(vKey));
+        redisLog(REDIS_NOTICE, "DeleteDB(%lu) on %s is %d pid=%d", count, vKey, result, server.idb_child_pid);
+        if (c->db->id != 0) sdsfree(vKey);
+    }
     addReply(c,shared.ok);
 }
 
@@ -550,12 +640,15 @@ void flushallCommand(redisClient *c) {
         kill(server.rdb_child_pid,SIGUSR1);
         rdbRemoveTempFile(server.rdb_child_pid);
     }
+
     if (server.iDBEnabled) {
         if (server.idb_child_pid != -1)
             kill(server.idb_child_pid,SIGUSR1);
-        if (flushAllToIDB() != REDIS_OK)
-            addReplyError(c, "Flush all on iDB Error");
+        iKeyDelete(server.iDBPath, NULL, 0);
+        //if (flushAllToIDB() != REDIS_OK)
+        //    addReplyError(c, "Flush all on iDB Error");
     }
+
     if (server.saveparamslen > 0 && server.rdbEnabled) {
         /* Normally rdbSave() will reset dirty, but we don't want this here
          * as otherwise FLUSHALL will not be replicated nor put into the AOF. */
@@ -668,8 +761,8 @@ void subkeysCommand(redisClient *c) {
             darray_foreach(vItem, *vResult) {
 //                fprintf(stderr, "got:%s\n", *vItem);
                 vObj = createObject(REDIS_STRING, *vItem);
-                    addReplyBulk(c,vObj);
-                    numkeys++;
+                addReplyBulk(c,vObj);
+                numkeys++;
                 decrRefCount(vObj);
             }
             darray_free(*vResult);
