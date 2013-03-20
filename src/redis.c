@@ -1033,6 +1033,7 @@ int serverCron(struct aeEventLoop *eventLoop, long long id, void *clientData) {
                     sp->changes, (int)sp->seconds);
                 if (server.rdbEnabled) rdbSaveBackground(server.rdb_filename);
                 if (server.iDBEnabled && !server.iDBSync) iDBSaveBackground();
+                if (server.iDBEnabled && !server.rdbEnabled && server.iDBSync) server.dirty = 0;
                 break;
             }
          }
@@ -1336,11 +1337,12 @@ void initServerConfig() {
     server.watchdog_period = 0;
 
     /* iDB Store: added by riceball */
-    server.iDBEnabled = 0;
+    server.iDBEnabled = 1;
     server.iDBType = STORE_IN_FILE;
     server.iDBPath = sdsnew("data.idb");
     server.rdbEnabled = 0;
     server.iDBSync = 1;
+    IDBMaxPageCount = 8192;
 }
 
 /* This function will try to raise the max number of open files accordingly to
