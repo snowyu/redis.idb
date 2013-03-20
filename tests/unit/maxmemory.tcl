@@ -1,4 +1,4 @@
-start_server {tags {"maxmemory"}} {
+start_server {tags {"maxmemory"} overrides {idb-enabled {no} rdb-enabled {yes}}} {
     foreach policy {
         allkeys-random allkeys-lru volatile-lru volatile-random volatile-ttl
     } {
