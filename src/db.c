@@ -158,8 +158,8 @@ static inline int deleteOnIDB(redisDb *db, robj *key) {
             dict *d = server.idb_child_pid == -1 ? db->dirtyKeys : db->dirtyQueue;
             result = dictUpdate(d, key, NULL) != NULL;
             if (!result) { //not found in dirtyKeys
-                d = (d == db->dirtyKeys) ? db->dirtyQueue: db->dirtyKeys;
-                result = dictFind(d, key) != NULL || iKeyIsExists(server.iDBPath, vKey, sdslen(vKey));
+                dict *d2 = (d == db->dirtyKeys) ? db->dirtyQueue: db->dirtyKeys;
+                result = dictFind(d2, key) != NULL || iKeyIsExists(server.iDBPath, vKey, sdslen(vKey));
                 //if (result) { //in case the key is on writing...., so just added it.
                     incrRefCount(key);
                     dictAdd(d, key, NULL);
