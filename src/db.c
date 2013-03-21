@@ -176,7 +176,7 @@ static inline int deleteOnIDB(redisDb *db, robj *key) {
     return result;
 }
 
-int flushDictToIDB(redisDb *db, dict *d) {
+int saveDictToIDB(redisDb *db, dict *d) {
     dictIterator *di = NULL;
     dictEntry *de;
     int vErr = REDIS_OK;
@@ -219,12 +219,12 @@ int flushAllToIDB() {
         redisDb *db = server.db+j;
         dict *d = db->dirtyKeys;
         count += dictSize(d);
-        vErr = flushDictToIDB(db, d);
+        vErr = saveDictToIDB(db, d);
         if (vErr == REDIS_OK) {
             dictEmpty(d);
             d = db->dirtyQueue;
             count += dictSize(d);
-            vErr = flushDictToIDB(db, d);
+            vErr = saveDictToIDB(db, d);
             if (vErr == REDIS_OK) dictEmpty(d);
         }
         if (vErr == REDIS_ERR) break;
@@ -246,8 +246,9 @@ int flushToIDB() {
         redisDb *db = server.db+j;
         dict *d = db->dirtyKeys;
         if (dictSize(d) == 0) continue;
-        vErr = flushDictToIDB(db, d);
+        vErr = saveDictToIDB(db, d);
         if (vErr) break;
+        usleep(1);
     }
     if (vErr == REDIS_OK) {
         redisLog(REDIS_NOTICE,"IDB saved on disk");
@@ -615,17 +616,17 @@ void flushdbCommand(redisClient *c) {
     dictEmpty(c->db->expires);
     if (server.cluster_enabled) slotToKeyFlush();
     if (server.iDBEnabled) {
+        size_t count = 0;
         if (server.idb_child_pid != -1) {
             kill(server.idb_child_pid,SIGUSR1);
         }
-        size_t count = 0;
         count += dictSize(c->db->dirtyKeys);
         count += dictSize(c->db->dirtyQueue);
         dictEmpty(c->db->dirtyKeys);
         dictEmpty(c->db->dirtyQueue);
         sds vKey = getKeyNameOnIDB(c->db->id, NULL);
         int result = iKeyDelete(server.iDBPath, vKey, sdslen(vKey));
-        redisLog(REDIS_NOTICE, "DeleteDB(%lu) on %s is %d pid=%d", count, vKey, result, server.idb_child_pid);
+        redisLog(REDIS_NOTICE, "flushdb(%d) total %lu keys deleted. DeleteDir=%d", c->db->id, count, result);
         if (c->db->id != 0) sdsfree(vKey);
     }
     addReply(c,shared.ok);
