@@ -569,6 +569,7 @@ int loadAppendOnlyFile(char *filename) {
     return REDIS_OK;
 
 readerr:
+    freeFakeClient(fakeClient);
     if (feof(fp)) {
         redisLog(REDIS_WARNING,"Unexpected end of file reading the append only file");
     } else {
@@ -576,6 +577,7 @@ readerr:
     }
     exit(1);
 fmterr:
+    freeFakeClient(fakeClient);
     redisLog(REDIS_WARNING,"Bad file format reading the append only file: make a backup of your AOF file, then use ./redis-check-aof --fix <filename>");
     exit(1);
 }
