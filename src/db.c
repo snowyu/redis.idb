@@ -360,6 +360,7 @@ robj *lookupKeyOnIDB(redisDb *db, robj *key) {
                 result = dictGetVal(de);
                 if (result) {
                     sds copy = sdsdup(key->ptr);
+                    incrRefCount(result);
                     int retval = dictAdd(db->dict, copy, result);
                     redisAssertWithInfo(NULL,key,retval == REDIS_OK);
                 }
