@@ -251,14 +251,14 @@ start_server {tags {"basic"}} {
         # expired for at most 1s when we wait 2s, resulting in a total sample
         # of 100 keys. The probability of the success of this test being a
         # false positive is therefore approx. 1%.
-        r set x 10
-        r expire x 1
+        r set setnxx 10
+        r expire setnxx 1
 
         # Wait for the key to expire
         after 2000
 
-        assert_equal 1 [r setnx x 20]
-        assert_equal 20 [r get x]
+        assert_equal 1 [r setnx setnxx 20]
+        assert_equal 20 [r get setnxx]
     }
 
     test {EXISTS} {
