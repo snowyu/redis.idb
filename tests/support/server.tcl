@@ -31,6 +31,7 @@ proc kill_server config {
     # nevermind if its already dead
     if {![is_alive $config]} { return }
     set pid [dict get $config pid]
+    clear_db [dict get $config host] [dict get $config port]
 
     # check for leaks
     if {![dict exists $config "skipleaks"]} {
@@ -74,6 +75,31 @@ proc is_alive config {
     } else {
         return 1
     }
+}
+
+proc clear_db {host port} {
+    set retval 0
+    if {[catch {
+        set fd [socket $::host $::port]
+        fconfigure $fd -translation binary
+        puts $fd "FLUSHALL\r\n"
+        flush $fd
+        set reply [gets $fd]
+        if {[string range $reply 0 0] eq {+} ||
+            [string range $reply 0 0] eq {-}} {
+            set retval 1
+        }
+        close $fd
+    } e]} {
+        if {$::verbose} {
+            puts -nonewline "."
+        }
+    } else {
+        if {$::verbose} {
+            puts -nonewline "ok"
+        }
+    }
+    return $retval
 }
 
 proc ping_server {host port} {
