@@ -47,13 +47,15 @@ proc kill_server config {
             }
         }
     }
+    set dbdir [dict get $config dir]
+    append dbdir "/data.idb"
 
     # kill server and wait for the process to be totally exited
     catch {exec kill $pid}
     while {[is_alive $config]} {
         incr wait 10
 
-        if {$wait >= 5000} {
+        if {$wait >= 5000 && $wait % 1000 == 0} {
             puts "Forcing process $pid to exit..."
             catch {exec kill -KILL $pid}
         } elseif {$wait % 1000 == 0} {
@@ -61,6 +63,8 @@ proc kill_server config {
         }
         after 10
     }
+    puts "deleting dir: $dbdir"
+    file delete -force $dbdir
 
     # Check valgrind errors if needed
     if {$::valgrind} {
@@ -83,12 +87,9 @@ proc clear_db {host port} {
         set fd [socket $::host $::port]
         fconfigure $fd -translation binary
         puts $fd "FLUSHALL\r\n"
+        puts $fd "shutdown nosave\r\n"
         flush $fd
         set reply [gets $fd]
-        if {[string range $reply 0 0] eq {+} ||
-            [string range $reply 0 0] eq {-}} {
-            set retval 1
-        }
         close $fd
     } e]} {
         if {$::verbose} {
@@ -186,6 +187,8 @@ proc start_server {options {code undefined}} {
     
     # use a different directory every time a server is started
     dict set config dir [tmpdir server]
+    dict set srv dir [dict get $config dir]
+
     
     # start every server on a different port
     set ::port [find_available_port [expr {$::port+1}]]
