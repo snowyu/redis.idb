@@ -135,8 +135,9 @@ static void setKeyOnIDB(redisDb *db, robj *key) {
                 } else {
                     dict *d = server.idb_child_pid == -1 ? db->dirtyKeys : db->dirtyQueue;
                     incrRefCount(val);
-                    if (dictReplace(d, key, val) == 1) //new key
-                        incrRefCount(key);
+                    incrRefCount(key);
+                    if (dictReplace(d, key, val) == 0) //0=old key;1=new key
+                        decrRefCount(key);
                 }
             }
     }
@@ -155,15 +156,23 @@ static inline int deleteOnIDB(redisDb *db, robj *key) {
             }
         }
         else {
+            int vKeyExists = iKeyIsExists(server.iDBPath, vKey, sdslen(vKey));
             dict *d = server.idb_child_pid == -1 ? db->dirtyKeys : db->dirtyQueue;
-            result = dictUpdate(d, key, NULL) != NULL;
+            result = dictDelete(d, key) == DICT_OK;
+            //result = dictUpdate(d, key, NULL) != NULL;
             if (!result) { //not found in dirtyKeys
                 dict *d2 = (d == db->dirtyKeys) ? db->dirtyQueue: db->dirtyKeys;
-                result = dictFind(d2, key) != NULL || iKeyIsExists(server.iDBPath, vKey, sdslen(vKey));
+                result = dictDelete(d2, key) == DICT_OK;
+                if (!result) result = vKeyExists;
+                //result = dictFind(d2, key) != NULL || iKeyIsExists(server.iDBPath, vKey, sdslen(vKey));
                 //if (result) { //in case the key is on writing...., so just added it.
-                    incrRefCount(key);
-                    dictAdd(d, key, NULL);
+                //    incrRefCount(key);
+                //    dictAdd(d, key, NULL);
                 //}
+            }
+            if (vKeyExists) {
+                //redisLog(REDIS_NOTICE, "deleted:%s", vKey);
+                iKeyDelete(server.iDBPath, vKey, sdslen(vKey));
             }
             //dictEntry *de = dictFind(d, key);
             //redisAssertWithInfo(NULL, key, dictGetVal(de) == NULL);
@@ -191,10 +200,8 @@ int saveDictToIDB(redisDb *db, dict *d) {
             robj *o = dictGetVal(de);
             long long expire;
             if (o == NULL) {
-                if (!iKeyDelete(server.iDBPath, key->ptr, sdslen(key->ptr))) {
-                    vErr = REDIS_ERR;
-                    break;
-                };
+                //ignore the delete error
+                iKeyDelete(server.iDBPath, key->ptr, sdslen(key->ptr));
             } else {
                 if (saveKeyValuePairOnIDB(db,key, o) == -1) {
                     redisLog(REDIS_WARNING,"iDB Write error saving key %s on disk", (char*)key->ptr);
@@ -442,7 +449,8 @@ robj *lookupKeyRead(redisDb *db, robj *key) {
 
 robj *lookupKeyWrite(redisDb *db, robj *key) {
     expireIfNeeded(db,key);
-    return lookupKey(db,key);
+    robj *val = lookupKey(db,key);
+    return val;
 }
 
 robj *lookupKeyReadOrReply(redisClient *c, robj *key, robj *reply) {
