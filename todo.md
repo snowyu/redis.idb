@@ -19,10 +19,11 @@ Only one database supports. the ‘select’ cmd is only for memory cache now.
 Internal
 ---------
 
+* !deleteKeyOnIDB: is always sync! it should be async too.
 * !* dbsizeCommand(db.c)
 * !* renameGenericCommand should be optimal
   * delete and add is not enough.
-
+* saveDictToIDB: iDelete should ignore error!!
 
 * redis string object may be store the int. so u must be care of encoding.
 
