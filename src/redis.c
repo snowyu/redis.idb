@@ -1341,7 +1341,7 @@ void initServerConfig() {
     server.iDBType = STORE_IN_FILE;
     server.iDBPath = sdsnew("data.idb");
     server.rdbEnabled = 0;
-    server.iDBSync = 1;
+    server.iDBSync = 0;
     IDBMaxPageCount = 8192;
 }
 
@@ -1886,10 +1886,6 @@ int processCommand(redisClient *c) {
 int prepareForShutdown(int flags) {
     int save = flags & REDIS_SHUTDOWN_SAVE;
     int nosave = flags & REDIS_SHUTDOWN_NOSAVE;
-    if (!server.rdbEnabled) {
-        save = 0;
-        nosave = 1;
-    }
 
     redisLog(REDIS_WARNING,"User requested shutdown...");
     /* Kill the saving child if there is a background saving in progress.
@@ -1917,16 +1913,31 @@ int prepareForShutdown(int flags) {
         aof_fsync(server.aof_fd);
     }
     if ((server.saveparamslen > 0 && !nosave) || save) {
-        redisLog(REDIS_NOTICE,"Saving the final RDB snapshot before exiting.");
-        /* Snapshotting. Perform a SYNC SAVE and exit */
-        if (rdbSave(server.rdb_filename) != REDIS_OK) {
-            /* Ooops.. error saving! The best we can do is to continue
-             * operating. Note that if there was a background saving process,
-             * in the next cron() Redis will be notified that the background
-             * saving aborted, handling special stuff like slaves pending for
-             * synchronization... */
-            redisLog(REDIS_WARNING,"Error trying to save the DB, can't exit.");
-            return REDIS_ERR;
+        if (server.rdbEnabled) {
+            redisLog(REDIS_NOTICE,"Saving the final RDB snapshot before exiting.");
+            /* Snapshotting. Perform a SYNC SAVE and exit */
+            if (rdbSave(server.rdb_filename) != REDIS_OK) {
+                /* Ooops.. error saving! The best we can do is to continue
+                 * operating. Note that if there was a background saving process,
+                 * in the next cron() Redis will be notified that the background
+                 * saving aborted, handling special stuff like slaves pending for
+                 * synchronization... */
+                redisLog(REDIS_WARNING,"Error trying to save the DB, can't exit.");
+                return REDIS_ERR;
+            }
+        }
+        if (server.iDBEnabled) {
+            redisLog(REDIS_NOTICE,"Saving the final IDB before exiting.");
+            /* Snapshotting. Perform a SYNC SAVE and exit */
+            if (flushAllToIDB() != REDIS_OK) {
+                /* Ooops.. error saving! The best we can do is to continue
+                 * operating. Note that if there was a background saving process,
+                 * in the next cron() Redis will be notified that the background
+                 * saving aborted, handling special stuff like slaves pending for
+                 * synchronization... */
+                redisLog(REDIS_WARNING,"Error trying to save the IDB, can't exit.");
+                return REDIS_ERR;
+            }
         }
     }
     if (server.daemonize) {
