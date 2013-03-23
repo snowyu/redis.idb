@@ -47,8 +47,8 @@ proc kill_server config {
             }
         }
     }
-    set dbdir [dict get $config dir]
-    append dbdir "/data.idb"
+    #set dbdir [dict get $config dir]
+    #append dbdir "/data.idb"
 
     # kill server and wait for the process to be totally exited
     catch {exec kill $pid}
@@ -63,8 +63,8 @@ proc kill_server config {
         }
         after 10
     }
-    puts "deleting dir: $dbdir"
-    file delete -force $dbdir
+    #puts "deleting dir: $dbdir"
+    #file delete -force $dbdir
 
     # Check valgrind errors if needed
     if {$::valgrind} {
