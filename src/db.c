@@ -68,21 +68,58 @@ static inline sds getKeyNameOnIDB(int dbId, sds key) {
     return result;
 }
 
+static inline int dictReplaceObj(dict *d, robj *key, robj *val) {
+    if (val) incrRefCount(val);
+    int result = dictUpdate(d, key, val) != NULL;
+    if (!result) { //new key
+        incrRefCount(key);
+        result = dictAdd(d, key, val) == DICT_OK;
+    }
+    return result;
+}
+
+static int dictAppendTo(dict *src, dict *dest) {
+    int vErr = REDIS_OK;
+    dictIterator *di;
+    dictEntry *de;
+    if (dictSize(src) != 0)
+    {
+        di = dictGetSafeIterator(src);
+        if (!di) {
+            return REDIS_ERR;
+        }
+        robj *key, *val;
+        while((de = dictNext(di)) != NULL) {
+            key = dictGetKey(de);
+            val = dictGetVal(de);
+            if (!dictReplaceObj(dest, key, val)) {
+                vErr = REDIS_ERR;
+                break;
+            }
+        }
+
+        dictReleaseIterator(di);
+    }
+    return vErr;
+}
+
 static inline dictEntry *getDictEntryOnDirtyKeys(redisDb *db, robj *key)
 {
-    dict *d = db->dirtyQueue;
-    dictEntry *de = dictFind(d, key);
-    if (de) {
-        //printf("%s found on dirtyQueue %d\n", key->ptr, dictGetVal(de) == NULL);
-        return de;
+    dict *d;
+    dictEntry *de;
+    if (server.idb_child_pid == -1) {
+        d = db->dirtyKeys;
+        de = dictFind(d, key);
     }
-    d = db->dirtyKeys;
-    de = dictFind(d, key);
-    if (de) {
-        //printf("%s found on dirtyKeys %d\n", key->ptr, dictGetVal(de) == NULL);
-        return de;
+    else {
+        d = db->dirtyQueue;
+        de = dictFind(d, key);
+        if (!de) {
+            d = db->dirtyKeys;
+            de = dictFind(d, key);
+        }
     }
-    return NULL;
+    return de;
 }
 /*-----------------------------------------------------------------------------
  * C-level DB API
@@ -134,10 +171,11 @@ static void setKeyOnIDB(redisDb *db, robj *key) {
                         redisLog(REDIS_WARNING,"iDB Write error saving key %s on disk", (char*)key->ptr);
                 } else {
                     dict *d = server.idb_child_pid == -1 ? db->dirtyKeys : db->dirtyQueue;
-                    incrRefCount(val);
-                    incrRefCount(key);
-                    if (dictReplace(d, key, val) == 0) //0=old key;1=new key
-                        decrRefCount(key);
+                    dictReplaceObj(d, key, val);
+                    //incrRefCount(val);
+                    //incrRefCount(key);
+                    //if (dictReplace(d, key, val) == 0) //0=old key;1=new key
+                    //    decrRefCount(key);
                 }
             }
     }
@@ -174,6 +212,39 @@ static inline int deleteOnIDB(redisDb *db, robj *key) {
                 //redisLog(REDIS_NOTICE, "deleted:%s", vKey);
                 iKeyDelete(server.iDBPath, vKey, sdslen(vKey));
             }
+            /* the deleting asynchronous is problem!
+            dict *d;
+            int vKeyExists = iKeyIsExists(server.iDBPath, vKey, sdslen(vKey));
+            if (server.idb_child_pid == -1)
+            {
+                d = db->dirtyKeys;
+                if (vKeyExists) { //added/update it to queue
+                    result = dictReplaceObj(d, key, NULL);
+                    if (!result) result = iKeyDelete(server.iDBPath, vKey, sdslen(vKey));
+                } else { //the key is not exists in the disk
+                    result = dictDelete(d, key) == DICT_OK;
+                    if (dictDelete(db->dirtyQueue, key) == DICT_OK)
+                        if (!result) result = 1;
+                }
+            }
+            else { //the bgsaving...
+                d = db->dirtyQueue;
+                dictEntry *de = dictFind(db->dirtyKeys, key);
+                if (vKeyExists) {
+                    //must add to queue always. for lookupKeyOnIDB
+                    //result = de && dictGetVal(de) == NULL; //the bgsaving is deleting...
+                    //if (!result) {
+                        result = dictReplaceObj(d, key, NULL);
+                        //if (!result) result = iKeyDelete(server.iDBPath, vKey, sdslen(vKey));
+                    //}
+                }
+                else { //the key is not exists in the disk
+                    result = de && dictGetVal(de) != NULL; //the bgsaving is adding...
+                    if (result) {
+                        result = dictReplaceObj(d, key, NULL);
+                    }
+                }
+            }*/
             //dictEntry *de = dictFind(d, key);
             //redisAssertWithInfo(NULL, key, dictGetVal(de) == NULL);
             //redisLog(REDIS_NOTICE, "deleteOnIDB:%s", key->ptr);
@@ -255,7 +326,7 @@ int flushToIDB() {
         if (dictSize(d) == 0) continue;
         vErr = saveDictToIDB(db, d);
         if (vErr) break;
-        usleep(1);
+        //usleep(1);
     }
     if (vErr == REDIS_OK) {
         redisLog(REDIS_NOTICE,"IDB saved on disk");
@@ -263,6 +334,31 @@ int flushToIDB() {
         server.idb_lastbgsave_status = REDIS_OK;
     }
     return vErr;
+}
+
+static void clearServerDirtyKeys() {
+    int j;
+    dict *d;
+
+    for (j = 0; j < server.dbnum; j++) {
+        redisDb *db = server.db+j;
+        d = db->dirtyKeys;
+        dictEmpty(d);
+        d = db->dirtyQueue;
+        db->dirtyQueue = db->dirtyKeys;
+        db->dirtyKeys = d;
+    }
+}
+
+static void restoreServerToDirtyKeys() {
+    int j;
+    redisDb *db;
+
+    for (j = 0; j < server.dbnum; j++) {
+        db = server.db+j;
+        dictAppendTo(db->dirtyQueue, db->dirtyKeys);
+        dictEmpty(db->dirtyQueue);
+    }
 }
 
 int iDBSaveBackground()
@@ -318,18 +414,11 @@ void backgroundIDBSaveDoneHandler(int exitcode, int bysignal) {
         server.dirty = server.dirty - server.idb_dirty_before_bgsave;
         server.idb_lastsave = time(NULL);
         server.idb_lastbgsave_status = REDIS_OK;
-        int j;
-        for (j = 0; j < server.dbnum; j++) {
-            redisDb *db = server.db+j;
-            dict *d = db->dirtyKeys;
-            dictEmpty(d);
-            d = db->dirtyQueue;
-            db->dirtyQueue = db->dirtyKeys;
-            db->dirtyKeys = d;
-        }
+        clearServerDirtyKeys();
     } else if (!bysignal && exitcode != 0) {
         redisLog(REDIS_WARNING, "IDB Background saving error");
         server.idb_lastbgsave_status = REDIS_ERR;
+        restoreServerToDirtyKeys();
     } else {
         redisLog(REDIS_WARNING,
             "IDB Background saving terminated by signal %d", bysignal);
@@ -337,6 +426,7 @@ void backgroundIDBSaveDoneHandler(int exitcode, int bysignal) {
          * tirggering an error conditon. */
         if (bysignal != SIGUSR1)
             server.idb_lastbgsave_status = REDIS_ERR;
+        restoreServerToDirtyKeys();
     }
     server.idb_child_pid = -1;
     server.idb_save_time_last = time(NULL)-server.idb_save_time_start;
@@ -605,7 +695,10 @@ int selectDb(redisClient *c, int id) {
  *----------------------------------------------------------------------------*/
 void signalModifiedKey(redisDb *db, robj *key) {
     touchWatchedKey(db,key);
-    setKeyOnIDB(db, key);
+    //if (dictFind(db->dict, key->ptr) != NULL)
+      setKeyOnIDB(db, key);
+    //else
+      //deleteOnIDB(db, key);
 }
 
 void signalFlushedDb(int dbid) {
