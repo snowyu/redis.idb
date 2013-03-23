@@ -133,26 +133,26 @@ static int saveKeyValuePairOnIDB(redisDb *db, robj *key, robj *val)
 {
     long long now = mstime();
     long long vExpiredTime = getExpire(db,key);
-    int vExpired = (vExpiredTime != -1 && vExpiredTime < now);
-    if (!vExpired) {
+    int vResult = (vExpiredTime != -1 && vExpiredTime < now);
+    if (!vResult) {
         rio vRedisIO;
         rioInitWithBuffer(&vRedisIO,sdsempty());
-        vExpired = 1; //store the operation result, default is successful.
+        vResult = 1; //store the operation result, default is successful.
         if (vExpiredTime != -1) {
-            if (rdbSaveType(&vRedisIO,REDIS_RDB_OPCODE_EXPIRETIME_MS) == -1) vExpired = -1;
-            if (rdbSaveMillisecondTime(&vRedisIO,vExpiredTime) == -1) vExpired = -1;
+            if (rdbSaveType(&vRedisIO,REDIS_RDB_OPCODE_EXPIRETIME_MS) == -1) vResult = -1;
+            if (rdbSaveMillisecondTime(&vRedisIO,vExpiredTime) == -1) vResult = -1;
         }
-        if (rdbSaveObjectType(&vRedisIO,val) == -1) vExpired = -1;
-        if (rdbSaveObject(&vRedisIO,val) == -1) vExpired = -1;
+        if (rdbSaveObjectType(&vRedisIO,val) == -1) vResult = -1;
+        if (rdbSaveObject(&vRedisIO,val) == -1) vResult = -1;
         sds v = vRedisIO.io.buffer.ptr;
         sds vKey = getKeyNameOnIDB(db->id, key->ptr);
-        if (iPut(server.iDBPath, vKey, sdslen(vKey), v, sdslen(v), NULL, server.iDBType) != 0) vExpired = -1;
-        if (iPut(server.iDBPath, vKey, sdslen(vKey), "redis", 5, ".type", server.iDBType) != 0) vExpired = -1;
+        if (iPut(server.iDBPath, vKey, sdslen(vKey), v, sdslen(v), NULL, server.iDBType) != 0) vResult = -1;
+        if (iPut(server.iDBPath, vKey, sdslen(vKey), "redis", 5, ".type", server.iDBType) != 0) vResult = -1;
         if (db->id != 0) sdsfree(vKey);
         sdsfree(v);
-        return vExpired;
+        return vResult;
     }
-    else
+    else //already expired.
         return 0;
 }
 
@@ -194,10 +194,10 @@ static inline int deleteOnIDB(redisDb *db, robj *key) {
             }
         }
         else {
+            /*/the deleting synchronous
             int vKeyExists = iKeyIsExists(server.iDBPath, vKey, sdslen(vKey));
             dict *d = server.idb_child_pid == -1 ? db->dirtyKeys : db->dirtyQueue;
             result = dictDelete(d, key) == DICT_OK;
-            //result = dictUpdate(d, key, NULL) != NULL;
             if (!result) { //not found in dirtyKeys
                 dict *d2 = (d == db->dirtyKeys) ? db->dirtyQueue: db->dirtyKeys;
                 result = dictDelete(d2, key) == DICT_OK;
@@ -209,15 +209,14 @@ static inline int deleteOnIDB(redisDb *db, robj *key) {
                 //}
             }
             if (vKeyExists) {
-                //redisLog(REDIS_NOTICE, "deleted:%s", vKey);
                 iKeyDelete(server.iDBPath, vKey, sdslen(vKey));
-            }
-            /* the deleting asynchronous is problem!
+            }*/
+             //the deleting asynchronous is problem!
             dict *d;
-            int vKeyExists = iKeyIsExists(server.iDBPath, vKey, sdslen(vKey));
             if (server.idb_child_pid == -1)
             {
                 d = db->dirtyKeys;
+                int vKeyExists = iKeyIsExists(server.iDBPath, vKey, sdslen(vKey));
                 if (vKeyExists) { //added/update it to queue
                     result = dictReplaceObj(d, key, NULL);
                     if (!result) result = iKeyDelete(server.iDBPath, vKey, sdslen(vKey));
@@ -229,22 +228,22 @@ static inline int deleteOnIDB(redisDb *db, robj *key) {
             }
             else { //the bgsaving...
                 d = db->dirtyQueue;
-                dictEntry *de = dictFind(db->dirtyKeys, key);
-                if (vKeyExists) {
+                //dictEntry *de = dictFind(db->dirtyKeys, key);
+                //if (vKeyExists) {
                     //must add to queue always. for lookupKeyOnIDB
                     //result = de && dictGetVal(de) == NULL; //the bgsaving is deleting...
                     //if (!result) {
                         result = dictReplaceObj(d, key, NULL);
                         //if (!result) result = iKeyDelete(server.iDBPath, vKey, sdslen(vKey));
                     //}
-                }
-                else { //the key is not exists in the disk
-                    result = de && dictGetVal(de) != NULL; //the bgsaving is adding...
-                    if (result) {
-                        result = dictReplaceObj(d, key, NULL);
-                    }
-                }
-            }*/
+                //}
+                //else { //the key is not exists in the disk
+                //    result = de && dictGetVal(de) != NULL; //the bgsaving is adding...
+                //    if (result) {
+                //        result = dictReplaceObj(d, key, NULL);
+                //    }
+                //}
+            }//*/
             //dictEntry *de = dictFind(d, key);
             //redisAssertWithInfo(NULL, key, dictGetVal(de) == NULL);
             //redisLog(REDIS_NOTICE, "deleteOnIDB:%s", key->ptr);
@@ -448,7 +447,8 @@ robj *lookupKeyOnIDB(redisDb *db, robj *key) {
             dictEntry *de = getDictEntryOnDirtyKeys(db, key);
             if (de) {
                 result = dictGetVal(de);
-                if (result) {
+                redisAssertWithInfo(NULL,key,result == NULL);
+                if (result) { //the strange is that it's not in the db.dict, only in dirtyKeys, why?
                     sds copy = sdsdup(key->ptr);
                     incrRefCount(result);
                     int retval = dictAdd(db->dict, copy, result);
