@@ -976,11 +976,6 @@ extern dictType hashDictType;
  * Functions prototypes
  *----------------------------------------------------------------------------*/
 
-/* iDB */
-int flushAllToIDB(); //save all changes to iDB.
-int iDBSaveBackground();
-void backgroundIDBSaveDoneHandler(int exitcode, int bysignal);
-
 /* Utils */
 long long ustime(void);
 long long mstime(void);
@@ -1324,8 +1319,6 @@ void incrbyfloatCommand(redisClient *c);
 void selectCommand(redisClient *c);
 void randomkeyCommand(redisClient *c);
 void keysCommand(redisClient *c);
-//subkeys keyPath pattern skipCount Count
-void subkeysCommand(redisClient *c);
 void dbsizeCommand(redisClient *c);
 void lastsaveCommand(redisClient *c);
 void saveCommand(redisClient *c);

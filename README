@@ -13,7 +13,7 @@ Disk Data Storage Features Comparison
 
 Purpose: Redis is a memcache, but can save the memcache data to disk.
 
-* All save to disk even if it is only a changes occurs.
+* All save to disk even if it is only a change occurs.
 * Support Asynchronous saved only.
 * much greater than the memory capacity of the storage will cause problems
 
@@ -70,11 +70,11 @@ Commands
 
 New commands list here:
 
-* subkeys KeyPath subkeysPattern skipCount Count
+* subkeys [KeyPath [subkeysPattern [Count [skipCount]]]]
   * the subkeys will iterate all matched subkeys in the keyPath for iDB.
   * skipCount: skip the count of matched subkeys before.
   * count: return the count of matched subkeys. it should be less than or equ idb-pagesize(if idb-pagesize enabled).
-  * eg, subkeys "" "" 0 0, will return all the keys in the iDB.
+  * eg, subkeys, will return all the keys in the iDB if idb-pagesize == 0.
   * Note: keys command only return all keys in the memory cache.
 
 Build
@@ -84,17 +84,27 @@ before building, you need ensure cmake installed, and run
 
     git submodule update --init --recursive
 
+
+if you update the deps/idb/ by git pull, you should make idb too:
+
+    cd deps/idb
+    git checkout master
+    git pull
+    make
+
 Todo
 -----
 
+* the current dbsize command only for the keys in memcache.
+* the most of debug command only for the keys in memcache.
 * ![Bug] AOF can not work on iDB. because AOF is still use dict(memcache) to save.
-* ![Bug] Replication too.
-* List, Set, Hash items should treat as subkey when saving to disk.
+* !List, Set, Hash items should treat as subkey when saving to disk.
   * Or if items is very large to do so.
+* !+ abstract new storage struct for memcache, aof, rdb, disk storage
 * Exchange value should be as an atomic operation?
   * I use two dicts to keep the changed keys, one is dirtyKeys, another is dirtyQueue. (if asynchronous is enabled.)
   * modifies will be added to dirtyKeys if no saving.
-  * any modifies will be added to dirtyQueue when saving occurs.
+  * any modifies will be added to dirtyQueue when bgsaving occurs.
   * the dirtyKeys will be empty and swap them(dirtyQueue, dirtyKeys) after saving
   * maybe it is no problem, after all redis is single thread.
 

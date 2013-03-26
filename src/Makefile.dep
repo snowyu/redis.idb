@@ -115,3 +115,4 @@ util.o: util.c fmacros.h util.h
 ziplist.o: ziplist.c zmalloc.h util.h ziplist.h endianconv.h config.h
 zipmap.o: zipmap.c zmalloc.h endianconv.h config.h
 zmalloc.o: zmalloc.c config.h zmalloc.h
+idb_redis.o: idb_redis.c idb_redis.h

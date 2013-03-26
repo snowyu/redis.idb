@@ -450,8 +450,19 @@ void loadServerConfigFromString(char *config) {
                 goto loaderr;
             }
         } else if (!strcasecmp(argv[0],"idb-path") && argc == 2) {
-            //sdsfree(server.iDBPath);
+            /*
+            long vIDBLocked = iGetInt(server.iDBPath, ".db", 3, ".locked", server.iDBType);
+            vIDBLocked--;
+            if (vIDBLocked < 0) vIDBLocked = 0;
+            iPutInt(server.iDBPath, ".db", 3, vIDBLocked, ".locked", server.iDBType);
+            */
             server.iDBPath = sdscpy(server.iDBPath, argv[1]);
+            /*
+            vIDBLocked = iGetInt(server.iDBPath, ".db", 3, ".locked", server.iDBType);
+            redisAssert(vIDBLocked == 0);
+            vIDBLocked++;
+            iPutInt(server.iDBPath, ".db", 3, vIDBLocked, ".locked", server.iDBType);
+            */
         } else if (!strcasecmp(argv[0],"idb-enabled") && argc == 2) {
             server.iDBEnabled = yesnotoi(argv[1]);
         } else if (!strcasecmp(argv[0],"idb-sync") && argc == 2) {
@@ -802,8 +813,19 @@ void configSetCommand(redisClient *c) {
             ll <= 0) goto badfmt;
         server.iDBType = ll;
     } else if (!strcasecmp(c->argv[2]->ptr,"idb-path")) {
-        //sdsfree(server.iDBPath);
+        /*
+            long vIDBLocked = iGetInt(server.iDBPath, ".db", 3, ".locked", server.iDBType);
+            vIDBLocked--;
+            if (vIDBLocked < 0) vIDBLocked = 0;
+            iPutInt(server.iDBPath, ".db", 3, vIDBLocked, ".locked", server.iDBType);
+        */
         server.iDBPath = sdscpy(server.iDBPath, o->ptr);
+        /*
+            vIDBLocked = iGetInt(server.iDBPath, ".db", 3, ".locked", server.iDBType);
+            redisAssert(vIDBLocked == 0);
+            vIDBLocked++;
+            iPutInt(server.iDBPath, ".db", 3, vIDBLocked, ".locked", server.iDBType);
+        */
     } else if (!strcasecmp(c->argv[2]->ptr,"idb-enabled")) {
         server.iDBEnabled = yesnotoi(o->ptr);
     } else if (!strcasecmp(c->argv[2]->ptr,"idb-sync")) {

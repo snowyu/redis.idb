@@ -31,6 +31,7 @@
 #include "slowlog.h"
 #include "bio.h"
 #include "idb_helpers.h"
+#include "idb_redis.h"
 
 #include <time.h>
 #include <signal.h>
@@ -209,7 +210,7 @@ struct redisCommand redisCommandTable[] = {
     {"pexpire",pexpireCommand,3,"w",0,NULL,1,1,1,0,0},
     {"pexpireat",pexpireatCommand,3,"w",0,NULL,1,1,1,0,0},
     {"keys",keysCommand,2,"rS",0,NULL,0,0,0,0,0},
-    {"subkeys",subkeysCommand,5,"rS",0,NULL,0,0,0,0,0},
+    {"subkeys",subkeysCommand,-1,"rS",0,NULL,0,0,0,0,0},
     {"dbsize",dbsizeCommand,1,"r",0,NULL,0,0,0,0,0},
     {"auth",authCommand,2,"rsl",0,NULL,0,0,0,0,0},
     {"ping",pingCommand,1,"r",0,NULL,0,0,0,0,0},
@@ -1950,6 +1951,9 @@ int prepareForShutdown(int flags) {
     if (server.unixsocket) {
         redisLog(REDIS_NOTICE,"Removing the unix socket file.");
         unlink(server.unixsocket); /* don't care if this fails */
+    }
+    if (server.iDBEnabled) {
+        iDecr(server.iDBPath, ".db", 3, ".locked", server.iDBType);
     }
     if (server.iDBPath) sdsfree(server.iDBPath);
 
