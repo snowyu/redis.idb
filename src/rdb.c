@@ -31,6 +31,7 @@
 #include "lzf.h"    /* LZF compression library */
 #include "zipmap.h"
 #include "endianconv.h"
+#include "idb_redis.h"
 
 #include <math.h>
 #include <sys/types.h>

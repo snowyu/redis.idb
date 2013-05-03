@@ -17,6 +17,8 @@
 #ifndef __IDB_REDIS_H
 #define __IDB_REDIS_H
 
+#include "../deps/idb/src/idb_helpers.h"
+
 //subkeys [keyPath [pattern [count [skipCount]]]]
 void subkeysCommand(redisClient *c);
 

@@ -527,7 +527,7 @@ void subkeysCommand(redisClient *c) {
 
         vPattern = (vPattern[0] == '*' && vPattern[1] == '\0') || vPattern[0] == '\0' ? NULL : vPattern;
         dStringArray *vResult = iSubkeys(server.iDBPath, vKeyPath, sdslen(vKeyPath), vPattern,
-            vSkipCount, vCount);
+            vSkipCount, vCount, dkFixed);
         if (vResult) {
             sds *vItem;
             robj *vObj;
