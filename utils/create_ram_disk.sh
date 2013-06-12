@@ -1,4 +1,7 @@
 #!/bin/sh
+# utils/create_ram_disk.sh MOUNT_POINT
+#
+#
 
 RAM_DISK=`hdiutil attach -nomount ram://7242880`
 MOUNT_POINT=$1
