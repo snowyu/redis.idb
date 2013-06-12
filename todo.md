@@ -23,6 +23,46 @@ Internal
   * delete and add is not enough.
 * saveDictToIDB: iDelete should ignore error!!
 * deleteKeyOnIDB: supports async now.
+* TYPE command supports iDB now.
+!+ AGET/ASET commands: get/set attribute value of the iDB.
+  * AGET Key attribute
+  * ASET Key attribute VALUE
+  * = GET/SET Key.attribute
+    * the [key].[attribute] is the special key now.
+      * [key].value == [key]
+      * setKey
+
+No: put it into saveKeyValuePairOnIDB
+
+      char* vAttr = strrchr(key->ptr, '.')
+      if (s != NULL) {
+            sds vKey  = sdsnewlen(key->ptr, vAttr-key->ptr);
+            if (saveKeyAttrOnIDB(db, vKey, vAttr, val)< 0)
+                redisLog(REDIS_WARNING,"iDB Write error saving key %s on disk", (char*)key->ptr);
+            sdsfree(vKey);
+        }
+        else if (saveKeyValuePairOnIDB(db, key, val) >= 0) {
+            //OK
+        }
+        else
+            redisLog(REDIS_WARNING,"iDB Write error saving key %s on disk", (char*)key->ptr);
+        static int saveKeyAttrOnIDB(redisDb *db, sds key, const char* attr, robj *val) {
+            int vResult = 1;
+            rio vRedisIO;
+            sds v = sdsempty();
+            rioInitWithBuffer(&vRedisIO, v);
+            if (rdbSaveObject(&vRedisIO,val) == -1) vResult = -1;
+            if (vResult == 1) {
+                sds vKey = getKeyNameOnIDB(db->id, key);
+                if (iPut(server.iDBPath, vKey, sdslen(vKey), v, sdslen(v), attr, server.iDBType) != 0) vResult = -1;
+                if (db->id != 0) sdsfree(vKey);
+            }
+            sdsfree(v);
+
+            return vResult;
+        }
+
+
 
 * redis string object may be store the int. so u must be care of encoding.
 
@@ -57,8 +97,10 @@ Internal
 * + load/save expired info in iDB
 * + remove expired keys in iDB 
 
-* + commands
+* + added commands
   * subkeys keyPath pattern skipCount count
+* * modified commands
+  * type key
 * sdsnewlen(NULL, len):
   mine(idb) means: reserved free space len for NULL string.
   redis means: alloc a unknown string with length!
@@ -75,6 +117,7 @@ Internal
         redisAssert(rdbSaveObjectType(&vRedisIO,val));
         redisAssert(rdbSaveObject(&vRedisIO,val));
         iPut(server.storePath, key->ptr, sdslen(key->ptr), vRedisIO.io.buffer.ptr, NULL, server.storeType);
+
 
 the internal pubsub feature can notify key changed:
 

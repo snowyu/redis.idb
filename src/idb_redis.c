@@ -111,12 +111,61 @@ dictEntry *getDictEntryOnDirtyKeys(redisDb *db, robj *key)
  * C-level DB API
  *----------------------------------------------------------------------------*/
 
+static int saveKeyAttrOnIDB(redisDb *db, sds key, const char* attr, robj *val) {
+    int vResult = 1;
+    rio vRedisIO;
+    rioInitWithBuffer(&vRedisIO, sdsempty());
+    if (rdbSaveObject(&vRedisIO,val) == -1) vResult = -1;
+    sds v = vRedisIO.io.buffer.ptr;
+    if (vResult == 1) {
+        sds vKey = getKeyNameOnIDB(db->id, key);
+        if (iPut(server.iDBPath, vKey, sdslen(vKey), v, sdslen(v), attr, server.iDBType) != 0) vResult = -1;
+        if (db->id != 0) sdsfree(vKey);
+    }
+    sdsfree(v);
+
+    return vResult;
+}
+
+//if expired return NULL
+static sds rval2str(redisDb *db, robj *val, long long vExpiredTime)
+{
+    long long now = mstime();
+    int vResult = (vExpiredTime != -1 && vExpiredTime < now);
+    if (!vResult) {
+        rio vRedisIO;
+        rioInitWithBuffer(&vRedisIO,sdsempty());
+        vResult = 1; //store the operation result, default is successful.
+        if (vExpiredTime != -1) {
+            if (rdbSaveType(&vRedisIO,REDIS_RDB_OPCODE_EXPIRETIME_MS) == -1) vResult = -1;
+            if (rdbSaveMillisecondTime(&vRedisIO,vExpiredTime) == -1) vResult = -1;
+        }
+        if (rdbSaveObjectType(&vRedisIO,val) == -1) vResult = -1;
+        if (rdbSaveObject(&vRedisIO,val) == -1) vResult = -1;
+        sds v = vRedisIO.io.buffer.ptr;
+        if (vResult == -1) {
+            sdsfree(v);
+            v = NULL;
+        }
+        return v;
+    }
+    else //already expired.
+        return NULL;
+}
+
 /* Save a key-value pair, with expire time, type, key, value.
  * On error -1 is returned.
  * On success if the key was actually saved 1 is returned, otherwise 0
  * is returned (the key was already expired). */
 static int saveKeyValuePairOnIDB(redisDb *db, robj *key, robj *val)
 {
+    char* vAttr = strrchr(key->ptr, '.');
+    if (vAttr != NULL) {
+        sds vKey  = sdsnewlen(key->ptr, vAttr - (char*)key->ptr);
+        if (saveKeyAttrOnIDB(db, vKey, vAttr, val)< 0)
+            redisLog(REDIS_WARNING,"iDB Write error saving key attr %s on disk", (char*)key->ptr);
+        sdsfree(vKey);
+    }
     long long now = mstime();
     long long vExpiredTime = getExpire(db,key);
     int vResult = (vExpiredTime != -1 && vExpiredTime < now);
