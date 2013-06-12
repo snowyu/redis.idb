@@ -106,7 +106,7 @@ Todo
   * modifies will be added to dirtyKeys if no saving.
   * any modifies will be added to dirtyQueue when bgsaving occurs.
   * the dirtyKeys will be empty and swap them(dirtyQueue, dirtyKeys) after saving
-  * maybe it is no problem, after all redis is single thread.
+  * maybe it is no problem, redis is single thread app after all.
 
 Redis
 =====
