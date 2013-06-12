@@ -239,7 +239,7 @@ int saveDictToIDB(redisDb *db, dict *d) {
         while((de = dictNext(di)) != NULL) {
             robj *key = dictGetKey(de);
             robj *o = dictGetVal(de);
-            long long expire;
+            //long long expire;
             if (o == NULL) {
                 //ignore the delete error
                 iKeyDelete(server.iDBPath, key->ptr, sdslen(key->ptr));
