@@ -5,8 +5,6 @@ config.c -- the new store-path parameter here
 Options
 -------
 
-Only one database supports. the ‘select’ cmd is only for memory cache now.
-
 * idb-enabled: enable/disable iDB storage. (iDBEnabled)
 * idb-path: iDB store path. (iDBPath)
 * idb-sync:  yes or no, write the iDB sync or async. (iDBSync)
@@ -19,11 +17,12 @@ Only one database supports. the ‘select’ cmd is only for memory cache now.
 Internal
 ---------
 
-* !deleteKeyOnIDB: is always sync! it should be async too.
+* !+ Save value as json string into iDB storage.
 * !* dbsizeCommand(db.c)
 * !* renameGenericCommand should be optimal
   * delete and add is not enough.
 * saveDictToIDB: iDelete should ignore error!!
+* deleteKeyOnIDB: supports async now.
 
 * redis string object may be store the int. so u must be care of encoding.
 
