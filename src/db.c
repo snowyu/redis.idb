@@ -386,20 +386,31 @@ void typeCommand(redisClient *c) {
     robj *o;
     char *type;
 
-    o = lookupKeyRead(c->db,c->argv[1]);
-    if (o == NULL) {
-        type = "none";
-    } else {
-        switch(o->type) {
-        case REDIS_STRING: type = "string"; break;
-        case REDIS_LIST: type = "list"; break;
-        case REDIS_SET: type = "set"; break;
-        case REDIS_ZSET: type = "zset"; break;
-        case REDIS_HASH: type = "hash"; break;
-        default: type = "unknown"; break;
+    o = c->argv[1]; //the key name
+    sds vKey = getKeyNameOnIDB(c->db->id, o->ptr);
+    //printf("try iGet:%s\n", vKey);
+    sds vValueType = iGet(server.iDBPath, vKey, sdslen(vKey), IDB_KEY_TYPE_NAME, server.iDBType);
+    if (c->db->id != 0) sdsfree(vKey);
+    if (!vValueType || strncmp(vValueType, "redis", 5) == 0) {
+        o = lookupKeyRead(c->db,o);
+        if (o == NULL) {
+            type = "none";
+        } else {
+            switch(o->type) {
+            case REDIS_STRING: type = "string"; break;
+            case REDIS_LIST: type = "list"; break;
+            case REDIS_SET: type = "set"; break;
+            case REDIS_ZSET: type = "zset"; break;
+            case REDIS_HASH: type = "hash"; break;
+            default: type = "unknown"; break;
+            }
         }
     }
+    else {
+        type = vValueType;
+    }
     addReplyStatus(c,type);
+    sdsfree(vValueType);
 }
 
 void shutdownCommand(redisClient *c) {
