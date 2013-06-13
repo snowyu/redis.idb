@@ -17,6 +17,8 @@ Options
 Internal
 ---------
 
+* !* [bug] crash the server if load value is not the redis type.
+  * put the type info into the value.
 * !+ Save value as json string into iDB storage.
 * !* dbsizeCommand(db.c)
 * !* renameGenericCommand should be optimal
