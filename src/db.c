@@ -107,9 +107,9 @@ void dbAdd(redisDb *db, robj *key, robj *val) {
  *
  * The program is aborted if the key was not already present. */
 void dbOverwrite(redisDb *db, robj *key, robj *val) {
-    struct dictEntry *de = dictFind(db->dict,key->ptr);
+    //struct dictEntry *de = dictFind(db->dict,key->ptr);
 
-    redisAssertWithInfo(NULL,key,de != NULL);
+    //redisAssertWithInfo(NULL,key,de != NULL);
     dictReplace(db->dict, key->ptr, val);
     //iPut(server.iDBPath, key->ptr, sdslen(key->ptr), val->ptr, NULL, server.iDBType);
 }
