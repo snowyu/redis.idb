@@ -28,9 +28,9 @@ Purpose: the Key/value Database(Persistent data storage) with a memcache.
 * Support subkeys with pagination or not.
 * Support the local partition keys for pagination.
 * support the multiple attributes of a key
-  * the key name can not include any dot '.' char now
+  * the key name can not include any dot '.' char
+    * if u wana use the '.' char in key name, u must escape it by '\'
     * seperate the key and attribute by dot('.') char.
-    * just be care, if ur key includes the dot('.')!!
   * the attribute is always string.
   * the 'get key.value' is same as 'get key'
   * get/set key.attribute
