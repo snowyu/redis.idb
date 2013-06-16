@@ -551,7 +551,7 @@ robj *lookupKeyOnIDB(redisDb *db, robj *key)
         sds vKey = getKeyNameOnIDB(db->id, key->ptr);
         //printf("try iGet:%s\n", vKey);
         char* vAttr = strrchr(vKey, '.');
-        sds vK = NULL;
+        sds vK = vKey;
         if (vAttr != NULL) {
            if (vAttr[1] != '\0')
                 vK  = sdsnewlen(vKey, vAttr - (char*)vKey);
@@ -562,8 +562,8 @@ robj *lookupKeyOnIDB(redisDb *db, robj *key)
         sds vValueBuffer;
         bool vIsValue = (vAttr == NULL || strncasecmp(vAttr, IDB_VALUE_NAME, strlen(IDB_VALUE_NAME)) == 0);
         if (vIsValue) {
-            vValueType = iGet(server.iDBPath, vKey, sdslen(vKey), IDB_KEY_TYPE_NAME, server.iDBType);
-            vValueBuffer = iGet(server.iDBPath, vKey, sdslen(vKey), NULL, server.iDBType);
+            vValueType = iGet(server.iDBPath, vK, sdslen(vK), IDB_KEY_TYPE_NAME, server.iDBType);
+            vValueBuffer = iGet(server.iDBPath, vK, sdslen(vK), NULL, server.iDBType);
         }
         else { //is attribute:
             vValueBuffer = iGet(server.iDBPath, vK, sdslen(vK), vAttr, server.iDBType);
