@@ -22,6 +22,7 @@
 
 #define REDIS_VALUE_MAGIC_FLAG "rEdIs\n"
 #define REDIS_VALUE_MAGIC_FLAG_LEN 6
+#define IS_IDB_ATTR(vAttr) vAttr[1] != '\0' && (vAttr-1) != vKey && vAttr[-1] != '\\'
 
 static inline int rdbWriteRaw(rio *rdb, void *p, size_t len) {
     if (rdb && rioWrite(rdb,p,len) == 0)
@@ -139,7 +140,7 @@ static int saveKeyValuePairOnIDB(redisDb *db, robj *key, robj *val)
     char* vAttr = strrchr(key->ptr, '.');
     sds vKey = key->ptr;
     if (vAttr != NULL) {
-        if (vAttr[1] != '\0')
+        if (IS_IDB_ATTR(vAttr))
             vKey  = sdsnewlen(key->ptr, vAttr - (char*)key->ptr);
         else
             vAttr = NULL;
@@ -152,16 +153,15 @@ static int saveKeyValuePairOnIDB(redisDb *db, robj *key, robj *val)
     int vResult = (vExpiredTime != -1 && vExpiredTime < now);
     if (!vResult) {
         rio vRedisIO;
-        rioInitWithBuffer(&vRedisIO,sdsempty());
-        if (rioWrite(&vRedisIO, REDIS_VALUE_MAGIC_FLAG, REDIS_VALUE_MAGIC_FLAG_LEN)==0) {
-            sdsfree(vRedisIO.io.buffer.ptr);
-            if (vAttr) sdsfree(vKey);
-            return -1;
-        }
         vResult = 1; //store the operation result, default is successful.
         sds vK = getKeyNameOnIDB(db->id, vKey);
         sds v = NULL;
         if (vAttr == NULL || strncasecmp(vAttr, IDB_VALUE_NAME, strlen(IDB_VALUE_NAME)) == 0) {
+            rioInitWithBuffer(&vRedisIO,sdsempty());
+            if (rioWrite(&vRedisIO, REDIS_VALUE_MAGIC_FLAG, REDIS_VALUE_MAGIC_FLAG_LEN)==0) {
+                sdsfree(vRedisIO.io.buffer.ptr);
+                return -1;
+            }
             if (vExpiredTime != -1) {
                 if (rdbSaveType(&vRedisIO,REDIS_RDB_OPCODE_EXPIRETIME_MS) == -1) vResult = -1;
                 if (rdbSaveMillisecondTime(&vRedisIO,vExpiredTime) == -1) vResult = -1;
@@ -171,18 +171,20 @@ static int saveKeyValuePairOnIDB(redisDb *db, robj *key, robj *val)
             v = vRedisIO.io.buffer.ptr;
             if (iPut(server.iDBPath, vK, sdslen(vK), v, sdslen(v), vAttr, server.iDBType) != 0) vResult = -1;
             if (iPut(server.iDBPath, vK, sdslen(vK), "redis", 5, IDB_KEY_TYPE_NAME, server.iDBType) != 0) vResult = -1;
+            sdsfree(v);
         }
         else if (val->type == REDIS_STRING) { //is attribute:
-            if (rdbSaveObject(&vRedisIO,val) == -1) vResult = -1;
-            v = vRedisIO.io.buffer.ptr;
+            val = getDecodedObject(val);
+            v = val->ptr;
             if (iPut(server.iDBPath, vK, sdslen(vK), v, sdslen(v), vAttr, server.iDBType) != 0) vResult = -1;
+            decrRefCount(val);
         }
         else {
             redisLog(REDIS_WARNING,"the key %s attr must be string type", (char*)key->ptr);
         }
         if (db->id != 0) sdsfree(vK);
         if (vAttr) sdsfree(vKey);
-        SDSFreeAndNil(v);
+        //SDSFreeAndNil(v);
         return vResult;
     }
     else //already expired.
@@ -221,7 +223,7 @@ int iDBKeyDelete(const sds aDir, const char* aKey, const int aKeyLen)
     char* vAttr = strrchr(aKey, '.');
     int result = 0;
     if (vAttr != NULL) {
-        if (vAttr[1] != '\0')
+        if (IS_IDB_ATTR(vAttr))
             vKey  = sdsnewlen(aKey, vAttr - (char*)aKey);
         else
             vAttr = NULL;
@@ -553,7 +555,7 @@ robj *lookupKeyOnIDB(redisDb *db, robj *key)
         char* vAttr = strrchr(vKey, '.');
         sds vK = vKey;
         if (vAttr != NULL) {
-           if (vAttr[1] != '\0')
+           if (IS_IDB_ATTR(vAttr))
                 vK  = sdsnewlen(vKey, vAttr - (char*)vKey);
            else
                 vAttr = NULL;
@@ -567,7 +569,7 @@ robj *lookupKeyOnIDB(redisDb *db, robj *key)
         }
         else { //is attribute:
             vValueBuffer = iGet(server.iDBPath, vK, sdslen(vK), vAttr, server.iDBType);
-            vValueType   = sdsnewlen("str", 3);
+            vValueType   = sdsnewlen("str",3);
             sdsfree(vK);
         }
         //printf("lookupKeyOnIDB Loaded: %s=%s\n", (char*)vKey, vValueBuffer);
@@ -620,10 +622,13 @@ void subkeysCommand(redisClient *c) {
         unsigned long numkeys = 0;
         void *replylen = addDeferredMultiBulkLength(c);
 
-        vPattern = (vPattern[0] == '*' && vPattern[1] == '\0') || vPattern[0] == '\0' ? NULL : vPattern;
-        dStringArray *vResult = iSubkeys(server.iDBPath, vKeyPath, sdslen(vKeyPath), vPattern,
+        if (vPattern) vPattern = (vPattern[0] == '*' && vPattern[1] == '\0') || vPattern[0] == '\0' ? NULL : vPattern;
+        sds vK = getKeyNameOnIDB(c->db->id, vKeyPath);
+        dStringArray *vResult = iSubkeys(server.iDBPath, vK, sdslen(vK), vPattern,
             vSkipCount, vCount, dkFixed);
-        if (vResult) {
+        if (c->db->id != 0) sdsfree(vK);
+        //redisLog(REDIS_WARNING, "dfffffff:\n");
+         if (vResult) {
             sds *vItem;
             robj *vObj;
             darray_foreach(vItem, *vResult) {
@@ -647,3 +652,23 @@ void subkeysCommand(redisClient *c) {
     }
 }
 
+/* ASET key attr value */
+void asetCommand(redisClient *c) {
+    robj *key, *attr, *value;
+    key   = c->argv[1];
+    attr  = c->argv[2];
+    value = c->argv[3];
+
+
+}
+/* ADEL key attr */
+void adelCommand(redisClient *c) {
+}
+
+/* AGET key attr */
+void agetCommand(redisClient *c) {
+}
+
+/* AEXISTS key attr */
+void aexistsCommand(redisClient *c) {
+}
