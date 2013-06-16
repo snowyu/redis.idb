@@ -527,9 +527,11 @@ void subkeysCommand(redisClient *c) {
         unsigned long numkeys = 0;
         void *replylen = addDeferredMultiBulkLength(c);
 
-        vPattern = (vPattern[0] == '*' && vPattern[1] == '\0') || vPattern[0] == '\0' ? NULL : vPattern;
-        dStringArray *vResult = iSubkeys(server.iDBPath, vKeyPath, sdslen(vKeyPath), vPattern,
+        if (vPattern) vPattern = (vPattern[0] == '*' && vPattern[1] == '\0') || vPattern[0] == '\0' ? NULL : vPattern;
+        sds vK = getKeyNameOnIDB(c->db->id, vKeyPath);
+        dStringArray *vResult = iSubkeys(server.iDBPath, vK, sdslen(vK), vPattern,
             vSkipCount, vCount, dkFixed);
+        if (c->db->id != 0) sdsfree(vK);
         if (vResult) {
             sds *vItem;
             robj *vObj;
