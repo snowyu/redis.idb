@@ -20,6 +20,9 @@
 #include "../deps/idb/src/idb_helpers.h"
 #include "../deps/idb/src/isdk_string.h"
 
+#define REDIS_VALUE_MAGIC_FLAG "rEdIs\n"
+#define REDIS_VALUE_MAGIC_FLAG_LEN 6
+
 static inline int rdbWriteRaw(rio *rdb, void *p, size_t len) {
     if (rdb && rioWrite(rdb,p,len) == 0)
         return -1;
@@ -127,32 +130,6 @@ static int saveKeyAttrOnIDB(redisDb *db, sds key, const char* attr, robj *val) {
     return vResult;
 }
 
-//if expired return NULL
-static sds rval2str(redisDb *db, robj *val, long long vExpiredTime)
-{
-    long long now = mstime();
-    int vResult = (vExpiredTime != -1 && vExpiredTime < now);
-    if (!vResult) {
-        rio vRedisIO;
-        rioInitWithBuffer(&vRedisIO,sdsempty());
-        vResult = 1; //store the operation result, default is successful.
-        if (vExpiredTime != -1) {
-            if (rdbSaveType(&vRedisIO,REDIS_RDB_OPCODE_EXPIRETIME_MS) == -1) vResult = -1;
-            if (rdbSaveMillisecondTime(&vRedisIO,vExpiredTime) == -1) vResult = -1;
-        }
-        if (rdbSaveObjectType(&vRedisIO,val) == -1) vResult = -1;
-        if (rdbSaveObject(&vRedisIO,val) == -1) vResult = -1;
-        sds v = vRedisIO.io.buffer.ptr;
-        if (vResult == -1) {
-            sdsfree(v);
-            v = NULL;
-        }
-        return v;
-    }
-    else //already expired.
-        return NULL;
-}
-
 /* Save a key-value pair, with expire time, type, key, value.
  * On error -1 is returned.
  * On success if the key was actually saved 1 is returned, otherwise 0
@@ -176,6 +153,11 @@ static int saveKeyValuePairOnIDB(redisDb *db, robj *key, robj *val)
     if (!vResult) {
         rio vRedisIO;
         rioInitWithBuffer(&vRedisIO,sdsempty());
+        if (rioWrite(&vRedisIO, REDIS_VALUE_MAGIC_FLAG, REDIS_VALUE_MAGIC_FLAG_LEN)==0) {
+            sdsfree(vRedisIO.io.buffer.ptr);
+            if (vAttr) sdsfree(vKey);
+            return -1;
+        }
         vResult = 1; //store the operation result, default is successful.
         sds vK = getKeyNameOnIDB(db->id, vKey);
         sds v = NULL;
@@ -498,7 +480,11 @@ static robj *rioReadValueFromBuffer(redisDb *db, robj *key, sds vValueBuffer)
 {
     robj *result = NULL;
     rio vRedisIO;
-    rioInitWithBuffer(&vRedisIO,vValueBuffer);
+    if (strncmp(vValueBuffer, REDIS_VALUE_MAGIC_FLAG, REDIS_VALUE_MAGIC_FLAG_LEN) != 0) {
+        redisLog(REDIS_WARNING, "(rioReadValueFromBuffer) value is invalid redis format: %s\n", (char*)key->ptr);
+        return NULL;
+    }
+    rioInitWithBuffer(&vRedisIO,vValueBuffer+REDIS_VALUE_MAGIC_FLAG_LEN);
     int vType =rdbLoadType(&vRedisIO);
     if (vType != -1) {
         int vExpired = 0;
