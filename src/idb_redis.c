@@ -628,7 +628,7 @@ void subkeysCommand(redisClient *c) {
             vSkipCount, vCount, dkFixed);
         if (c->db->id != 0) sdsfree(vK);
         //redisLog(REDIS_WARNING, "dfffffff:\n");
-         if (vResult) {
+        if (vResult) {
             sds *vItem;
             robj *vObj;
             darray_foreach(vItem, *vResult) {
