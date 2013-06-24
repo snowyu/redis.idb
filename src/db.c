@@ -133,18 +133,7 @@ void setKey(redisDb *db, robj *key, robj *val) {
 
 int dbExists(redisDb *db, robj *key) {
     int result = dictFind(db->dict,key->ptr) != NULL;
-    if (!result && server.iDBEnabled) {
-        if (!server.iDBSync) {
-            dictEntry *de = getDictEntryOnDirtyKeys(db, key);
-            if (de) {
-                result = dictGetVal(de) != NULL;
-                return result;
-            }
-        }
-        sds vKey = getKeyNameOnIDB(db->id, key->ptr);
-        result = iKeyIsExists(server.iDBPath, vKey, sdslen(vKey));
-        if (db->id != 0) sdsfree(vKey);
-    }
+    if (!result) result = existsOnIDB(db, key);
     return result;
 }
 

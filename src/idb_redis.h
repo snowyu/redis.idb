@@ -34,6 +34,11 @@ void setKeyOnIDB(redisDb *db, robj *key);
 
 sds getKeyNameOnIDB(int dbId, sds key);
 dictEntry *getDictEntryOnDirtyKeys(redisDb *db, robj *key);
+int existsOnIDB(redisDb *db, robj *key);
 
+void aexistsCommand(redisClient *c);
+void agetCommand(redisClient *c);
+void adelCommand(redisClient *c);
+void asetCommand(redisClient *c);
 
 #endif

@@ -23,6 +23,10 @@
 #define REDIS_VALUE_MAGIC_FLAG "rEdIs\n"
 #define REDIS_VALUE_MAGIC_FLAG_LEN 6
 #define IS_IDB_ATTR(vAttr) vAttr[1] != '\0' && (vAttr-1) != vKey && vAttr[-1] != '\\'
+//the expired time is Millisecond, so the 1 minute = 1*60*1000
+#define IDB_CACHE_TIME -5*60*1000
+//the item will be saved to iDB if it's expired time greater than this:
+#define IDB_SAVED_EXPIRED_TIME 60*60*1000
 
 static inline int rdbWriteRaw(rio *rdb, void *p, size_t len) {
     if (rdb && rioWrite(rdb,p,len) == 0)
@@ -114,6 +118,24 @@ dictEntry *getDictEntryOnDirtyKeys(redisDb *db, robj *key)
 /*-----------------------------------------------------------------------------
  * C-level DB API
  *----------------------------------------------------------------------------*/
+int existsOnIDB(redisDb *db, robj *key)
+{
+    int result = 0;
+    if (server.iDBEnabled) {
+        if (!server.iDBSync) {
+            dictEntry *de = getDictEntryOnDirtyKeys(db, key);
+            if (de) {
+                result = dictGetVal(de) != NULL;
+                return result;
+            }
+        }
+        sds vKey = getKeyNameOnIDB(db->id, key->ptr);
+        result = iKeyIsExists(server.iDBPath, vKey, sdslen(vKey));
+        if (db->id != 0) sdsfree(vKey);
+    }
+    return result;
+    //
+}
 
 static int saveKeyAttrOnIDB(redisDb *db, sds key, const char* attr, robj *val) {
     int vResult = 1;
@@ -655,20 +677,93 @@ void subkeysCommand(redisClient *c) {
 /* ASET key attr value */
 void asetCommand(redisClient *c) {
     robj *key, *attr, *value;
+    int vResult = 1;
     key   = c->argv[1];
     attr  = c->argv[2];
     value = c->argv[3];
 
+    sds vKey = getKeyNameOnIDB(c->db->id, key->ptr);
+    char* vAttr = attr->ptr;
+    if (vAttr) vAttr = vAttr[0] == '\0' ? IDB_VALUE_NAME : vAttr;
+
+    if (iPut(server.iDBPath, vKey, sdslen(vKey), value->ptr, sdslen(value->ptr), attr->ptr, server.iDBType) != 0) vResult = 0;
+    if (strncasecmp(vAttr, IDB_VALUE_NAME, strlen(IDB_VALUE_NAME)) == 0) {
+        if (iPut(server.iDBPath, vKey, sdslen(vKey), "str", 3, IDB_KEY_TYPE_NAME, server.iDBType) != 0) vResult = 0;
+    }
+    if (c->db->id != 0) sdsfree(vKey);
+    if (vResult) {
+        if (strncmp(vAttr, IDB_VALUE_NAME, strlen(IDB_VALUE_NAME))==0) {
+            dictReplace(c->db->dict, key->ptr, value);
+            incrRefCount(value);
+        }
+        addReply(c, shared.ok);
+    }
+    else
+        addReplyError(c, "aset save disk error!");
 
 }
 /* ADEL key attr */
 void adelCommand(redisClient *c) {
+    robj *key, *attr;
+    int deleted = 0;
+    key   = c->argv[1];
+    attr  = c->argv[2];
+
+    sds vKey = getKeyNameOnIDB(c->db->id, key->ptr);
+    char* vAttr = attr->ptr;
+    if (vAttr) vAttr = vAttr[0] == '\0' ? IDB_VALUE_NAME : vAttr;
+
+    if (strncasecmp(vAttr, IDB_VALUE_NAME, strlen(IDB_VALUE_NAME)) == 0) {
+        if (dbDelete(c->db,key)) {
+            signalModifiedKey(c->db,key);
+            notifyKeyspaceEvent(REDIS_NOTIFY_GENERIC,
+                "del",key,c->db->id);
+            server.dirty++;
+            deleted++;
+        }
+    }
+    else
+        if (iDelete(server.iDBPath, vKey, sdslen(vKey), attr->ptr, server.iDBType)) deleted++;
+    if (c->db->id != 0) sdsfree(vKey);
+    if (deleted) {
+        addReply(c, shared.ok);
+    }
+    else
+        addReplyError(c, "adel error!");
 }
 
 /* AGET key attr */
 void agetCommand(redisClient *c) {
+    robj *key, *attr;
+    sds value;
+    key   = c->argv[1];
+    attr  = c->argv[2];
+
+    char* vAttr = attr->ptr;
+    if (vAttr) vAttr = vAttr[0] == '\0' ? IDB_VALUE_NAME : vAttr;
+    if (strncasecmp(vAttr, IDB_VALUE_NAME, strlen(IDB_VALUE_NAME)) == 0) {
+        getCommand(c);
+    }
+    else {
+        value = iGet(server.iDBPath, key->ptr, sdslen(key->ptr), vAttr, server.iDBType);
+        key=createObject(REDIS_STRING, value);
+        addReplyBulk(c, key);
+        decrRefCount(key);
+        //SDSFreeAndNil(value);
+    }
 }
 
 /* AEXISTS key attr */
 void aexistsCommand(redisClient *c) {
+    robj *key, *attr;
+    key   = c->argv[1];
+    attr  = c->argv[2];
+    char* vAttr = attr->ptr;
+    if (vAttr) vAttr = vAttr[0] == '\0' ? IDB_VALUE_NAME : vAttr;
+    if (iIsExists(server.iDBPath, key->ptr, sdslen(key->ptr), vAttr, server.iDBType)) {
+        addReply(c, shared.cone);
+    }
+    else {
+        addReply(c, shared.czero);
+    }
 }
