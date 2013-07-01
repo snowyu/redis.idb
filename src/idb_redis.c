@@ -678,92 +678,116 @@ void subkeysCommand(redisClient *c) {
 void asetCommand(redisClient *c) {
     robj *key, *attr, *value;
     int vResult = 1;
-    key   = c->argv[1];
-    attr  = c->argv[2];
-    value = c->argv[3];
 
-    sds vKey = getKeyNameOnIDB(c->db->id, key->ptr);
-    char* vAttr = attr->ptr;
-    if (vAttr) vAttr = vAttr[0] == '\0' ? IDB_VALUE_NAME : vAttr;
+    if (server.iDBEnabled) {
+        key   = c->argv[1];
+        attr  = c->argv[2];
+        value = c->argv[3];
 
-    if (iPut(server.iDBPath, vKey, sdslen(vKey), value->ptr, sdslen(value->ptr), attr->ptr, server.iDBType) != 0) vResult = 0;
-    if (strncasecmp(vAttr, IDB_VALUE_NAME, strlen(IDB_VALUE_NAME)) == 0) {
-        if (iPut(server.iDBPath, vKey, sdslen(vKey), "str", 3, IDB_KEY_TYPE_NAME, server.iDBType) != 0) vResult = 0;
-    }
-    if (c->db->id != 0) sdsfree(vKey);
-    if (vResult) {
-        if (strncmp(vAttr, IDB_VALUE_NAME, strlen(IDB_VALUE_NAME))==0) {
-            dictReplace(c->db->dict, key->ptr, value);
-            incrRefCount(value);
+        sds vKey = getKeyNameOnIDB(c->db->id, key->ptr);
+        char* vAttr = attr->ptr;
+        if (vAttr) vAttr = vAttr[0] == '\0' ? IDB_VALUE_NAME : vAttr;
+
+        if (iPut(server.iDBPath, vKey, sdslen(vKey), value->ptr, sdslen(value->ptr), attr->ptr, server.iDBType) != 0) vResult = 0;
+        if (strncasecmp(vAttr, IDB_VALUE_NAME, strlen(IDB_VALUE_NAME)) == 0) {
+            if (iPut(server.iDBPath, vKey, sdslen(vKey), "str", 3, IDB_KEY_TYPE_NAME, server.iDBType) != 0) vResult = 0;
         }
-        addReply(c, shared.ok);
+        if (c->db->id != 0) sdsfree(vKey);
+        if (vResult) {
+            if (strncmp(vAttr, IDB_VALUE_NAME, strlen(IDB_VALUE_NAME))==0) {
+                dictReplace(c->db->dict, key->ptr, value);
+                incrRefCount(value);
+            }
+            addReply(c, shared.ok);
+        }
+        else
+            addReplyError(c, "aset save disk error!");
     }
-    else
-        addReplyError(c, "aset save disk error!");
-
+    else {
+        addReplyError(c, "the idb is disabled, you should set idb-enabled to yes first on configuration first.");
+    }
 }
 /* ADEL key attr */
 void adelCommand(redisClient *c) {
     robj *key, *attr;
     int deleted = 0;
-    key   = c->argv[1];
-    attr  = c->argv[2];
+    if (server.iDBEnabled) {
+        key   = c->argv[1];
+        attr  = c->argv[2];
 
-    sds vKey = getKeyNameOnIDB(c->db->id, key->ptr);
-    char* vAttr = attr->ptr;
-    if (vAttr) vAttr = vAttr[0] == '\0' ? IDB_VALUE_NAME : vAttr;
+        sds vKey = getKeyNameOnIDB(c->db->id, key->ptr);
+        char* vAttr = attr->ptr;
+        if (vAttr) vAttr = vAttr[0] == '\0' ? IDB_VALUE_NAME : vAttr;
 
-    if (strncasecmp(vAttr, IDB_VALUE_NAME, strlen(IDB_VALUE_NAME)) == 0) {
-        if (dbDelete(c->db,key)) {
-            signalModifiedKey(c->db,key);
-            notifyKeyspaceEvent(REDIS_NOTIFY_GENERIC,
-                "del",key,c->db->id);
-            server.dirty++;
-            deleted++;
+        if (strncasecmp(vAttr, IDB_VALUE_NAME, strlen(IDB_VALUE_NAME)) == 0) {
+            if (dbDelete(c->db,key)) {
+                signalModifiedKey(c->db,key);
+                notifyKeyspaceEvent(REDIS_NOTIFY_GENERIC,
+                    "del",key,c->db->id);
+                server.dirty++;
+                deleted++;
+            }
         }
+        else
+            if (iDelete(server.iDBPath, vKey, sdslen(vKey), attr->ptr, server.iDBType)) deleted++;
+        if (c->db->id != 0) sdsfree(vKey);
+        if (deleted) {
+            addReply(c, shared.ok);
+        }
+        else
+            addReplyError(c, "adel error!");
     }
-    else
-        if (iDelete(server.iDBPath, vKey, sdslen(vKey), attr->ptr, server.iDBType)) deleted++;
-    if (c->db->id != 0) sdsfree(vKey);
-    if (deleted) {
-        addReply(c, shared.ok);
+    else {
+        addReplyError(c, "the idb is disabled, you should set idb-enabled to yes first on configuration first.");
     }
-    else
-        addReplyError(c, "adel error!");
 }
 
 /* AGET key attr */
 void agetCommand(redisClient *c) {
     robj *key, *attr;
     sds value;
-    key   = c->argv[1];
-    attr  = c->argv[2];
+    if (server.iDBEnabled) {
+        key   = c->argv[1];
+        attr  = c->argv[2];
 
-    char* vAttr = attr->ptr;
-    if (vAttr) vAttr = vAttr[0] == '\0' ? IDB_VALUE_NAME : vAttr;
-    if (strncasecmp(vAttr, IDB_VALUE_NAME, strlen(IDB_VALUE_NAME)) == 0) {
-        getCommand(c);
+        char* vAttr = attr->ptr;
+        if (vAttr) vAttr = vAttr[0] == '\0' ? IDB_VALUE_NAME : vAttr;
+        if (strncasecmp(vAttr, IDB_VALUE_NAME, strlen(IDB_VALUE_NAME)) == 0) {
+            getCommand(c);
+        }
+        else {
+            sds vKey = getKeyNameOnIDB(c->db->id, key->ptr);
+            value = iGet(server.iDBPath, vKey, sdslen(vKey), vAttr, server.iDBType);
+            if (c->db->id != 0) sdsfree(vKey);
+            key=createObject(REDIS_STRING, value);
+            addReplyBulk(c, key);
+            decrRefCount(key);
+            //SDSFreeAndNil(value);
+        }
     }
     else {
-        value = iGet(server.iDBPath, key->ptr, sdslen(key->ptr), vAttr, server.iDBType);
-        key=createObject(REDIS_STRING, value);
-        addReplyBulk(c, key);
-        decrRefCount(key);
-        //SDSFreeAndNil(value);
+        addReplyError(c, "the idb is disabled, you should set idb-enabled to yes first on configuration first.");
     }
 }
 
 /* AEXISTS key attr */
 void aexistsCommand(redisClient *c) {
     robj *key, *attr;
-    key   = c->argv[1];
-    attr  = c->argv[2];
-    char* vAttr = attr->ptr;
-    if (vAttr) vAttr = vAttr[0] == '\0' ? IDB_VALUE_NAME : vAttr;
-    if (iIsExists(server.iDBPath, key->ptr, sdslen(key->ptr), vAttr, server.iDBType)) {
-        addReply(c, shared.cone);
+    if (server.iDBEnabled) {
+        key   = c->argv[1];
+        attr  = c->argv[2];
+        sds vKey = getKeyNameOnIDB(c->db->id, key->ptr);
+        char* vAttr = attr->ptr;
+        if (vAttr) vAttr = vAttr[0] == '\0' ? IDB_VALUE_NAME : vAttr;
+        if (iIsExists(server.iDBPath, vKey, sdslen(vKey), vAttr, server.iDBType)) {
+            addReply(c, shared.cone);
+        }
+        else {
+            addReply(c, shared.czero);
+        }
+        if (c->db->id != 0) sdsfree(vKey);
     }
     else {
-        addReply(c, shared.czero);
+        addReplyError(c, "the idb is disabled, you should set idb-enabled to yes first on configuration first.");
     }
 }

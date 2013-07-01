@@ -15,6 +15,38 @@ start_server {tags {"idb"}} {
         lsort [r subkeys "" "" 3]
     } {foo_a foo_b foo_c}
     test {SUBKEYS to get second page} {
-        lsort [r subkeys "" "" 3 1*3]
+        lsort [r subkeys "" "" 3 3]
     } {key_x key_y key_z}
+
+    test {ASET and AGET an item} {
+        r aset x ".text" "hello"
+        r aget x ".text"
+    } "hello"
+
+    test {ASET and AGET an empty item} {
+        r aset x ".text" {}
+        r aget x ".text"
+    } {}
+
+    test {ADEL against a single item} {
+        r adel x ".text"
+        r aget x ".text"
+    } {}
+
+    test {AEXISTS} {
+        set res {}
+        r aset newkey ".text" test
+        append res [r aexists newkey ".text"]
+        r adel newkey ".text"
+        append res [r aexists newkey ".text"]
+    } {10}
+
+    test {Zero length value in key. ASET/AGET/AEXISTS} {
+        r aset emptykey ".text" {}
+        set res [r aget emptykey ".text"]
+        append res [r aexists emptykey ".text"]
+        r adel emptykey ".text"
+        append res [r aexists emptykey ".text"]
+    } {10}
+
 }
