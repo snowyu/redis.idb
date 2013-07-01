@@ -26,13 +26,17 @@ Internal
 * saveDictToIDB: iDelete should ignore error!!
 * deleteKeyOnIDB: supports async now.
 * TYPE command supports iDB now.
-!+ AGET/ASET commands: get/set attribute value of the iDB.
-  * AGET Key attribute
+!* the expired time value is a signed integer(64bit), extension flags:
+  * -1: Never Save to iDB, but cache it for ever in memory.
+  * <0: means the item of iDB cache expired time.
++ AGET/ASET/AEXISTS/ADEL commands: get/set/exists/del attribute value of the iDB.
+  * AGET/AEXISTS/ADEL Key attribute
   * ASET Key attribute VALUE
-  * = GET/SET Key.attribute
-    * the [key].[attribute] is the special key now.
-      * [key].value == [key]
-      * setKey
+  * ASET/AGET key .value = GET/SET Key
+    * [key] .value == [key]
+* !+ dict* attributes in redis: cache the attributes here
+  * attributes[key] = dict* attrs
+* !+ the escape '.' char in key name is not work fined.
 
 No: put it into saveKeyValuePairOnIDB
 

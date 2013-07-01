@@ -35,6 +35,11 @@ Purpose: the Key/value Database(Persistent data storage) with a memcache.
   * the 'get key.value' is same as 'get key'
   * get/set key.attribute
 
+if set the expired time, it will cache in memory only in stead of saving to iDB.
+if set the negated expired time, it will cache in memory for the abs(expired_time) and save to iDB.
+
+
+
 Configuration
 -------------
 
@@ -82,6 +87,13 @@ New commands list here:
   * count: return the count of matched subkeys. it should be less than or equ idb-pagesize(if idb-pagesize enabled).
   * eg, subkeys, will return all the keys in the iDB if idb-pagesize == 0.
   * Note: keys command only return all keys in the memory cache.
+* Attribute operations: 
+  * the attribute ".value" means the key's value.
+  * the attribute ".type" means the key's type.
+  * aset key attribute value: set the attribute of the key
+  * aget/aexists/adel key attribute: get/(check exists)/del the attribute of the key
+  * attrs key: list the attributes of the key
+
 
 Build
 ------
