@@ -159,8 +159,10 @@ static int saveKeyAttrOnIDB(redisDb *db, sds key, const char* attr, robj *val) {
  * is returned (the key was already expired). */
 static int saveKeyValuePairOnIDB(redisDb *db, robj *key, robj *val)
 {
-    char* vAttr = strrchr(key->ptr, '.');
+    //char* vAttr = strrchr(key->ptr, '.');
+    char* vAttr = NULL;
     sds vKey = key->ptr;
+    /*
     if (vAttr != NULL) {
         if (IS_IDB_ATTR(vAttr))
             vKey  = sdsnewlen(key->ptr, vAttr - (char*)key->ptr);
@@ -170,6 +172,7 @@ static int saveKeyValuePairOnIDB(redisDb *db, robj *key, robj *val)
         //    redisLog(REDIS_WARNING,"iDB Write error saving key attr %s on disk", (char*)key->ptr);
         //sdsfree(vKey);
     }
+    */
     long long now = mstime();
     long long vExpiredTime = getExpire(db,key);
     int vResult = (vExpiredTime != -1 && vExpiredTime < now);
@@ -178,7 +181,7 @@ static int saveKeyValuePairOnIDB(redisDb *db, robj *key, robj *val)
         vResult = 1; //store the operation result, default is successful.
         sds vK = getKeyNameOnIDB(db->id, vKey);
         sds v = NULL;
-        if (vAttr == NULL || strncasecmp(vAttr, IDB_VALUE_NAME, strlen(IDB_VALUE_NAME)) == 0) {
+        //if (vAttr == NULL || strncasecmp(vAttr, IDB_VALUE_NAME, strlen(IDB_VALUE_NAME)) == 0) {
             rioInitWithBuffer(&vRedisIO,sdsempty());
             if (rioWrite(&vRedisIO, REDIS_VALUE_MAGIC_FLAG, REDIS_VALUE_MAGIC_FLAG_LEN)==0) {
                 sdsfree(vRedisIO.io.buffer.ptr);
@@ -194,7 +197,7 @@ static int saveKeyValuePairOnIDB(redisDb *db, robj *key, robj *val)
             if (iPut(server.iDBPath, vK, sdslen(vK), v, sdslen(v), vAttr, server.iDBType) != 0) vResult = -1;
             if (iPut(server.iDBPath, vK, sdslen(vK), "redis", 5, IDB_KEY_TYPE_NAME, server.iDBType) != 0) vResult = -1;
             sdsfree(v);
-        }
+        /*}
         else if (val->type == REDIS_STRING) { //is attribute:
             val = getDecodedObject(val);
             v = val->ptr;
@@ -203,7 +206,7 @@ static int saveKeyValuePairOnIDB(redisDb *db, robj *key, robj *val)
         }
         else {
             redisLog(REDIS_WARNING,"the key %s attr must be string type", (char*)key->ptr);
-        }
+        }*/
         if (db->id != 0) sdsfree(vK);
         if (vAttr) sdsfree(vKey);
         //SDSFreeAndNil(v);
@@ -242,8 +245,9 @@ void setKeyOnIDB(redisDb *db, robj *key)
 int iDBKeyDelete(const sds aDir, const char* aKey, const int aKeyLen)
 {
     sds vKey = NULL;
-    char* vAttr = strrchr(aKey, '.');
+    //char* vAttr = strrchr(aKey, '.');
     int result = 0;
+    /*
     if (vAttr != NULL) {
         if (IS_IDB_ATTR(vAttr))
             vKey  = sdsnewlen(aKey, vAttr - (char*)aKey);
@@ -251,17 +255,17 @@ int iDBKeyDelete(const sds aDir, const char* aKey, const int aKeyLen)
             vAttr = NULL;
     }
     if (vAttr == NULL)
-    {
+    {*/
         result = iKeyIsExists(server.iDBPath, aKey, aKeyLen);
         if (result == 1)
             iKeyDelete(server.iDBPath, aKey, aKeyLen);
-    }
+    /*}
     else {
         result = iKeyIsExists(server.iDBPath, vKey, sdslen(vKey));
         if (result == 1)
             result = iDelete(server.iDBPath, vKey, sdslen(vKey), vAttr, server.iDBType);
         sdsfree(vKey);
-    }
+    }*/
     return result;
 }
 
@@ -576,24 +580,24 @@ robj *lookupKeyOnIDB(redisDb *db, robj *key)
         //printf("try iGet:%s\n", vKey);
         char* vAttr = strrchr(vKey, '.');
         sds vK = vKey;
-        if (vAttr != NULL) {
+        /*if (vAttr != NULL) {
            if (IS_IDB_ATTR(vAttr))
                 vK  = sdsnewlen(vKey, vAttr - (char*)vKey);
            else
                 vAttr = NULL;
-        }
+        }*/
         sds vValueType = NULL;
         sds vValueBuffer;
-        bool vIsValue = (vAttr == NULL || strncasecmp(vAttr, IDB_VALUE_NAME, strlen(IDB_VALUE_NAME)) == 0);
-        if (vIsValue) {
+        /*bool vIsValue = (vAttr == NULL || strncasecmp(vAttr, IDB_VALUE_NAME, strlen(IDB_VALUE_NAME)) == 0);
+        if (vIsValue) {*/
             vValueType = iGet(server.iDBPath, vK, sdslen(vK), IDB_KEY_TYPE_NAME, server.iDBType);
             vValueBuffer = iGet(server.iDBPath, vK, sdslen(vK), NULL, server.iDBType);
-        }
+        /*}
         else { //is attribute:
             vValueBuffer = iGet(server.iDBPath, vK, sdslen(vK), vAttr, server.iDBType);
             vValueType   = sdsnewlen("str",3);
             sdsfree(vK);
-        }
+        }*/
         //printf("lookupKeyOnIDB Loaded: %s=%s\n", (char*)vKey, vValueBuffer);
         if (db->id != 0) sdsfree(vKey);
         if (vValueBuffer) {
