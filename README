@@ -35,7 +35,7 @@ Purpose: the Key/value Database(Persistent data storage) with a memcache.
   * the 'get key.value' is same as 'get key'
   * get/set key.attribute
 
-if set the expired time, it will cache in memory only in stead of saving to iDB.
+if set the expired time, it will cache in memory only instead of saving to iDB.
 if set the negated expired time, it will cache in memory for the abs(expired_time) and save to iDB.
 
 
