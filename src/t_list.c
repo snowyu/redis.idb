@@ -29,8 +29,6 @@
 
 #include "redis.h"
 
-void signalListAsReady(redisClient *c, robj *key);
-
 /*-----------------------------------------------------------------------------
  * List API
  *----------------------------------------------------------------------------*/
@@ -40,7 +38,7 @@ void signalListAsReady(redisClient *c, robj *key);
  * objects are never too long. */
 void listTypeTryConversion(robj *subject, robj *value) {
     if (subject->encoding != REDIS_ENCODING_ZIPLIST) return;
-    if (value->encoding == REDIS_ENCODING_RAW &&
+    if (sdsEncodedObject(value) &&
         sdslen(value->ptr) > server.list_max_ziplist_value)
             listTypeConvert(subject,REDIS_ENCODING_LINKEDLIST);
 }
@@ -234,7 +232,7 @@ void listTypeInsert(listTypeEntry *entry, robj *value, int where) {
 int listTypeEqual(listTypeEntry *entry, robj *o) {
     listTypeIterator *li = entry->li;
     if (li->encoding == REDIS_ENCODING_ZIPLIST) {
-        redisAssertWithInfo(NULL,o,o->encoding == REDIS_ENCODING_RAW);
+        redisAssertWithInfo(NULL,o,sdsEncodedObject(o));
         return ziplistCompare(entry->zi,o->ptr,sdslen(o->ptr));
     } else if (li->encoding == REDIS_ENCODING_LINKEDLIST) {
         return equalStringObjects(o,listNodeValue(entry->ln));
@@ -297,14 +295,11 @@ void listTypeConvert(robj *subject, int enc) {
 void pushGenericCommand(redisClient *c, int where) {
     int j, waiting = 0, pushed = 0;
     robj *lobj = lookupKeyWrite(c->db,c->argv[1]);
-    int may_have_waiting_clients = (lobj == NULL);
 
     if (lobj && lobj->type != REDIS_LIST) {
         addReply(c,shared.wrongtypeerr);
         return;
     }
-
-    if (may_have_waiting_clients) signalListAsReady(c,c->argv[1]);
 
     for (j = 2; j < c->argc; j++) {
         c->argv[j] = tryObjectEncoding(c->argv[j]);
@@ -709,7 +704,6 @@ void rpoplpushHandlePush(redisClient *c, robj *dstkey, robj *dstobj, robj *value
     if (!dstobj) {
         dstobj = createZiplistObject();
         dbAdd(c->db,dstkey,dstobj);
-        signalListAsReady(c,dstkey);
     }
     signalModifiedKey(c->db,dstkey);
     listTypePush(dstobj,value,REDIS_HEAD);
@@ -778,7 +772,7 @@ void rpoplpushCommand(redisClient *c) {
 
 /* Set a client in blocking mode for the specified key, with the specified
  * timeout */
-void blockForKeys(redisClient *c, robj **keys, int numkeys, time_t timeout, robj *target) {
+void blockForKeys(redisClient *c, robj **keys, int numkeys, mstime_t timeout, robj *target) {
     dictEntry *de;
     list *l;
     int j;
@@ -808,13 +802,11 @@ void blockForKeys(redisClient *c, robj **keys, int numkeys, time_t timeout, robj
         }
         listAddNodeTail(l,c);
     }
-
-    /* Mark the client as a blocked client */
-    c->flags |= REDIS_BLOCKED;
-    server.bpop_blocked_clients++;
+    blockClient(c,REDIS_BLOCKED_LIST);
 }
 
-/* Unblock a client that's waiting in a blocking operation such as BLPOP */
+/* Unblock a client that's waiting in a blocking operation such as BLPOP.
+ * You should never call this function directly, but unblockClient() instead. */
 void unblockClientWaitingData(redisClient *c) {
     dictEntry *de;
     dictIterator *di;
@@ -837,37 +829,33 @@ void unblockClientWaitingData(redisClient *c) {
     dictReleaseIterator(di);
 
     /* Cleanup the client structure */
-    dictEmpty(c->bpop.keys);
+    dictEmpty(c->bpop.keys,NULL);
     if (c->bpop.target) {
         decrRefCount(c->bpop.target);
         c->bpop.target = NULL;
     }
-    c->flags &= ~REDIS_BLOCKED;
-    c->flags |= REDIS_UNBLOCKED;
-    server.bpop_blocked_clients--;
-    listAddNodeTail(server.unblocked_clients,c);
 }
 
 /* If the specified key has clients blocked waiting for list pushes, this
  * function will put the key reference into the server.ready_keys list.
- * Note that db->ready_keys is an hash table that allows us to avoid putting
+ * Note that db->ready_keys is a hash table that allows us to avoid putting
  * the same key again and again in the list in case of multiple pushes
  * made by a script or in the context of MULTI/EXEC.
  *
  * The list will be finally processed by handleClientsBlockedOnLists() */
-void signalListAsReady(redisClient *c, robj *key) {
+void signalListAsReady(redisDb *db, robj *key) {
     readyList *rl;
 
     /* No clients blocking for this key? No need to queue it. */
-    if (dictFind(c->db->blocking_keys,key) == NULL) return;
+    if (dictFind(db->blocking_keys,key) == NULL) return;
 
     /* Key was already signaled? No need to queue it again. */
-    if (dictFind(c->db->ready_keys,key) != NULL) return;
+    if (dictFind(db->ready_keys,key) != NULL) return;
 
     /* Ok, we need to queue this key into server.ready_keys. */
     rl = zmalloc(sizeof(*rl));
     rl->key = key;
-    rl->db = c->db;
+    rl->db = db;
     incrRefCount(key);
     listAddNodeTail(server.ready_keys,rl);
 
@@ -875,10 +863,10 @@ void signalListAsReady(redisClient *c, robj *key) {
      * to avoid adding it multiple times into a list with a simple O(1)
      * check. */
     incrRefCount(key);
-    redisAssert(dictAdd(c->db->ready_keys,key,NULL) == DICT_OK);
+    redisAssert(dictAdd(db->ready_keys,key,NULL) == DICT_OK);
 }
 
-/* This is an helper function for handleClientsBlockedOnLists(). It's work
+/* This is a helper function for handleClientsBlockedOnLists(). It's work
  * is to serve a specific client (receiver) that is blocked on 'key'
  * in the context of the specified 'db', doing the following:
  *
@@ -1000,10 +988,10 @@ void handleClientsBlockedOnLists(void) {
 
                         if (value) {
                             /* Protect receiver->bpop.target, that will be
-                             * freed by the next unblockClientWaitingData()
+                             * freed by the next unblockClient()
                              * call. */
                             if (dstkey) incrRefCount(dstkey);
-                            unblockClientWaitingData(receiver);
+                            unblockClient(receiver);
 
                             if (serveClientBlockedOnList(receiver,
                                 rl->key,dstkey,rl->db,value,
@@ -1021,7 +1009,7 @@ void handleClientsBlockedOnLists(void) {
                         }
                     }
                 }
-                
+
                 if (listTypeLength(o) == 0) dbDelete(rl->db,rl->key);
                 /* We don't call signalModifiedKey() as it was already called
                  * when an element was pushed on the list. */
@@ -1036,32 +1024,14 @@ void handleClientsBlockedOnLists(void) {
     }
 }
 
-int getTimeoutFromObjectOrReply(redisClient *c, robj *object, time_t *timeout) {
-    long tval;
-
-    if (getLongFromObjectOrReply(c,object,&tval,
-        "timeout is not an integer or out of range") != REDIS_OK)
-        return REDIS_ERR;
-
-    if (tval < 0) {
-        addReplyError(c,"timeout is negative");
-        return REDIS_ERR;
-    }
-
-    if (tval > 0) tval += server.unixtime;
-    *timeout = tval;
-
-    return REDIS_OK;
-}
-
 /* Blocking RPOP/LPOP */
 void blockingPopGenericCommand(redisClient *c, int where) {
     robj *o;
-    time_t timeout;
+    mstime_t timeout;
     int j;
 
-    if (getTimeoutFromObjectOrReply(c,c->argv[c->argc-1],&timeout) != REDIS_OK)
-        return;
+    if (getTimeoutFromObjectOrReply(c,c->argv[c->argc-1],&timeout,UNIT_SECONDS)
+        != REDIS_OK) return;
 
     for (j = 1; j < c->argc-1; j++) {
         o = lookupKeyWrite(c->db,c->argv[j]);
@@ -1120,10 +1090,10 @@ void brpopCommand(redisClient *c) {
 }
 
 void brpoplpushCommand(redisClient *c) {
-    time_t timeout;
+    mstime_t timeout;
 
-    if (getTimeoutFromObjectOrReply(c,c->argv[3],&timeout) != REDIS_OK)
-        return;
+    if (getTimeoutFromObjectOrReply(c,c->argv[3],&timeout,UNIT_SECONDS)
+        != REDIS_OK) return;
 
     robj *key = lookupKeyWrite(c->db, c->argv[1]);
 

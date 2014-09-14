@@ -18,6 +18,7 @@ set ::all_tests {
     unit/protocol
     unit/basic
     unit/idb
+    unit/scan
     unit/type/list
     unit/type/list-2
     unit/type/list-3
@@ -34,6 +35,7 @@ set ::all_tests {
     integration/replication-2
     integration/replication-3
     integration/replication-4
+    integration/replication-psync
     integration/aof
     integration/rdb
     integration/convert-zipmap-hash-on-load
@@ -45,6 +47,8 @@ set ::all_tests {
     unit/limits
     unit/obuf-limits
     unit/bitops
+    unit/memefficiency
+    unit/hyperloglog
 }
 # Index to the next test to run in the ::all_tests list.
 set ::next_test 0
@@ -162,21 +166,6 @@ proc cleanup {} {
     if {!$::quiet} {puts "OK"}
 }
 
-proc find_available_port start {
-    for {set j $start} {$j < $start+1024} {incr j} {
-        if {[catch {
-            set fd [socket 127.0.0.1 $j]
-        }]} {
-            return $j
-        } else {
-            close $fd
-        }
-    }
-    if {$j == $start+1024} {
-        error "Can't find a non busy port in the $start-[expr {$start+1023}] range."
-    }
-}
-
 proc test_server_main {} {
     cleanup
     set tclsh [info nameofexecutable]
@@ -186,7 +175,7 @@ proc test_server_main {} {
     if {!$::quiet} {
         puts "Starting test server at port $port"
     }
-    socket -server accept_test_clients $port
+    socket -server accept_test_clients -myaddr 127.0.0.1 $port
 
     # Start the client instances
     set ::clients_pids {}
@@ -202,6 +191,7 @@ proc test_server_main {} {
     # Setup global state for the test server
     set ::idle_clients {}
     set ::active_clients {}
+    array set ::active_clients_task {}
     array set ::clients_start_time {}
     set ::clients_time_history {}
     set ::failed_tests {}
@@ -215,9 +205,12 @@ proc test_server_main {} {
 # may be used in the future in order to detect test clients taking too much
 # time to execute the task.
 proc test_server_cron {} {
+    # Do some work here.
+    after 100 test_server_cron
 }
 
 proc accept_test_clients {fd addr port} {
+    fconfigure $fd -encoding binary
     fileevent $fd readable [list read_from_test_client $fd]
 }
 
@@ -251,14 +244,17 @@ proc read_from_test_client fd {
         puts "\[$completed_tests_count/$all_tests_count [colorstr yellow $status]\]: $data ($elapsed seconds)"
         lappend ::clients_time_history $elapsed $data
         signal_idle_client $fd
+        set ::active_clients_task($fd) DONE
     } elseif {$status eq {ok}} {
         if {!$::quiet} {
             puts "\[[colorstr green $status]\]: $data"
         }
+        set ::active_clients_task($fd) "(OK) $data"
     } elseif {$status eq {err}} {
         set err "\[[colorstr red $status]\]: $data"
         puts $err
         lappend ::failed_tests $err
+        set ::active_clients_task($fd) "(ERR) $data"
     } elseif {$status eq {exception}} {
         puts "\[[colorstr red $status]\]: $data"
         foreach p $::clients_pids {
@@ -266,7 +262,7 @@ proc read_from_test_client fd {
         }
         exit 1
     } elseif {$status eq {testing}} {
-        # No op
+        set ::active_clients_task($fd) "(IN PROGRESS) $data"
     } else {
         if {!$::quiet} {
             puts "\[$status\]: $data"
@@ -280,10 +276,24 @@ proc signal_idle_client fd {
     # Remove this fd from the list of active clients.
     set ::active_clients \
         [lsearch -all -inline -not -exact $::active_clients $fd]
+
+    if 0 {
+        # The following loop is only useful for debugging tests that may
+        # enter an infinite loop. Commented out normally.
+        foreach x $::active_clients {
+            if {[info exist ::active_clients_task($x)]} {
+                puts "$x => $::active_clients_task($x)"
+            } else {
+                puts "$x => ???"
+            }
+        }
+    }
+
     # New unit to process?
     if {$::next_test != [llength $::all_tests]} {
         if {!$::quiet} {
             puts [colorstr bold-white "Testing [lindex $::all_tests $::next_test]"]
+            set ::active_clients_task($fd) "ASSIGNED: $fd ([lindex $::all_tests $::next_test])"
         }
         set ::clients_start_time($fd) [clock seconds]
         send_data_packet $fd run [lindex $::all_tests $::next_test]
@@ -324,6 +334,7 @@ proc the_end {} {
 # to read the command, execute, reply... all this in a loop.
 proc test_client_main server_port {
     set ::test_server_fd [socket localhost $server_port]
+    fconfigure $::test_server_fd -encoding binary
     send_data_packet $::test_server_fd ready [pid]
     while 1 {
         set bytes [gets $::test_server_fd]
@@ -465,7 +476,7 @@ proc close_replication_stream {s} {
 # With the parallel test running multiple Redis instances at the same time
 # we need a fast enough computer, otherwise a lot of tests may generate
 # false positives.
-# If the computer is too slow we revert the sequetial test without any
+# If the computer is too slow we revert the sequential test without any
 # parallelism, that is, clients == 1.
 proc is_a_slow_computer {} {
     set start [clock milliseconds]

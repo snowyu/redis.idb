@@ -244,7 +244,7 @@ void setKeyOnIDB(redisDb *db, robj *key)
 
 int iDBKeyDelete(const sds aDir, const char* aKey, const int aKeyLen)
 {
-    sds vKey = NULL;
+    //sds vKey = NULL;
     //char* vAttr = strrchr(aKey, '.');
     int result = 0;
     /*
@@ -367,11 +367,11 @@ int flushAllToIDB() {
         count += dictSize(d);
         vErr = saveDictToIDB(db, d);
         if (vErr == REDIS_OK) {
-            dictEmpty(d);
+            dictEmpty(d, NULL);
             d = db->dirtyQueue;
             count += dictSize(d);
             vErr = saveDictToIDB(db, d);
-            if (vErr == REDIS_OK) dictEmpty(d);
+            if (vErr == REDIS_OK) dictEmpty(d, NULL);
         }
         if (vErr == REDIS_ERR) break;
     }
@@ -411,7 +411,7 @@ static void clearServerDirtyKeys() {
     for (j = 0; j < server.dbnum; j++) {
         redisDb *db = server.db+j;
         d = db->dirtyKeys;
-        dictEmpty(d);
+        dictEmpty(d, NULL);
         d = db->dirtyQueue;
         db->dirtyQueue = db->dirtyKeys;
         db->dirtyKeys = d;
@@ -425,7 +425,7 @@ static void restoreServerToDirtyKeys() {
     for (j = 0; j < server.dbnum; j++) {
         db = server.db+j;
         dictAppendTo(db->dirtyQueue, db->dirtyKeys);
-        dictEmpty(db->dirtyQueue);
+        dictEmpty(db->dirtyQueue, NULL);
     }
 }
 
@@ -438,13 +438,15 @@ int iDBSaveBackground()
 
     server.idb_dirty_before_bgsave = server.dirty;
 
+    server.dirty_before_bgsave = server.dirty;
+    server.lastbgsave_try = time(NULL);
+
     start = ustime();
     if ((childpid = fork()) == 0) {
         int retval;
 
         /* Child */
-        if (server.ipfd > 0) close(server.ipfd);
-        if (server.sofd > 0) close(server.sofd);
+        closeListeningSockets(0);
         redisSetProcTitle("redis-idb-bgsave");
         retval = flushToIDB();
         if (retval == REDIS_OK) {
@@ -452,7 +454,7 @@ int iDBSaveBackground()
 
             if (private_dirty) {
                 redisLog(REDIS_NOTICE,
-                    "IDB: %lu MB of memory used by copy-on-write",
+                    "IDB: %zu MB of memory used by copy-on-write",
                     private_dirty/(1024*1024));
             }
         }
@@ -460,6 +462,8 @@ int iDBSaveBackground()
     } else {
         /* Parent */
         server.stat_fork_time = ustime()-start;
+        server.stat_fork_rate = (double) zmalloc_used_memory() * 1000000 / server.stat_fork_time / (1024*1024*1024); /* GB per second. */
+        latencyAddSampleIfNeeded("fork",server.stat_fork_time/1000);
         if (childpid == -1) {
             redisLog(REDIS_WARNING,"IDB Can't save in background: fork: %s",
                 strerror(errno));
@@ -578,7 +582,7 @@ robj *lookupKeyOnIDB(redisDb *db, robj *key)
         }
         sds vKey = getKeyNameOnIDB(db->id, key->ptr);
         //printf("try iGet:%s\n", vKey);
-        char* vAttr = strrchr(vKey, '.');
+        //char* vAttr = strrchr(vKey, '.');
         sds vK = vKey;
         /*if (vAttr != NULL) {
            if (IS_IDB_ATTR(vAttr))

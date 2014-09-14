@@ -86,6 +86,7 @@ static size_t rioFileWrite(rio *r, const void *buf, size_t len) {
     if (r->io.file.autosync &&
         r->io.file.buffered >= r->io.file.autosync)
     {
+        fflush(r->io.file.fp);
         aof_fsync(fileno(r->io.file.fp));
         r->io.file.buffered = 0;
     }
@@ -108,6 +109,8 @@ static const rio rioBufferIO = {
     rioBufferTell,
     NULL,           /* update_checksum */
     0,              /* current checksum */
+    0,              /* bytes read or written */
+    0,              /* read/write chunk size */
     { { NULL, 0 } } /* union for io-specific vars */
 };
 
@@ -117,6 +120,8 @@ static const rio rioFileIO = {
     rioFileTell,
     NULL,           /* update_checksum */
     0,              /* current checksum */
+    0,              /* bytes read or written */
+    0,              /* read/write chunk size */
     { { NULL, 0 } } /* union for io-specific vars */
 };
 

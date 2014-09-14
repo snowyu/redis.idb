@@ -74,16 +74,24 @@ start_server {tags {"repl"}} {
             if {$::valgrind} {after 2000}
             list [r -1 dbsize] [r 0 dbsize]
         } {0 0}
+
+        test {ROLE in master reports master with a slave} {
+            set res [r -1 role]
+            lassign $res role offset slaves
+            assert {$role eq {master}}
+            assert {$offset > 0}
+            assert {[llength $slaves] == 1}
+            lassign [lindex $slaves 0] master_host master_port slave_offset
+            assert {$slave_offset <= $offset}
+        }
+
+        test {ROLE in slave reports slave in connected state} {
+            set res [r role]
+            lassign $res role master_host master_port slave_state slave_offset
+            assert {$role eq {slave}}
+            assert {$slave_state eq {connected}}
+        }
     }
-}
-
-proc start_write_load {host port seconds} {
-    set tclsh [info nameofexecutable]
-    exec $tclsh tests/helpers/gen_write_load.tcl $host $port $seconds &
-}
-
-proc stop_write_load {handle} {
-    catch {exec /bin/kill -9 $handle}
 }
 
 start_server {tags {"repl"}} {
@@ -112,7 +120,7 @@ start_server {tags {"repl"}} {
                     set retry 500
                     while {$retry} {
                         set info [r -3 info]
-                        if {[string match {*slave0:*,online*slave1:*,online*slave2:*,online*} $info]} {
+                        if {[string match {*slave0:*state=online*slave1:*state=online*slave2:*state=online*} $info]} {
                             break
                         } else {
                             incr retry -1

@@ -37,6 +37,7 @@
 #include <unistd.h>
 #include <sys/time.h>
 #include <float.h>
+#include <stdint.h>
 
 #include "util.h"
 
@@ -214,28 +215,91 @@ long long memtoll(const char *p, int *err) {
     return val*mul;
 }
 
-/* Convert a long long into a string. Returns the number of
- * characters needed to represent the number, that can be shorter if passed
- * buffer length is not enough to store the whole number. */
-int ll2string(char *s, size_t len, long long value) {
-    char buf[32], *p;
-    unsigned long long v;
-    size_t l;
+/* Return the number of digits of 'v' when converted to string in radix 10.
+ * See ll2string() for more information. */
+uint32_t digits10(uint64_t v) {
+    if (v < 10) return 1;
+    if (v < 100) return 2;
+    if (v < 1000) return 3;
+    if (v < 1000000000000UL) {
+        if (v < 100000000UL) {
+            if (v < 1000000) {
+                if (v < 10000) return 4;
+                return 5 + (v >= 100000);
+            }
+            return 7 + (v >= 10000000UL);
+        }
+        if (v < 10000000000UL) {
+            return 9 + (v >= 1000000000UL);
+        }
+        return 11 + (v >= 100000000000UL);
+    }
+    return 12 + digits10(v / 1000000000000UL);
+}
 
-    if (len == 0) return 0;
-    v = (value < 0) ? -value : value;
-    p = buf+31; /* point to the last character */
-    do {
-        *p-- = '0'+(v%10);
-        v /= 10;
-    } while(v);
-    if (value < 0) *p-- = '-';
-    p++;
-    l = 32-(p-buf);
-    if (l+1 > len) l = len-1; /* Make sure it fits, including the nul term */
-    memcpy(s,p,l);
-    s[l] = '\0';
-    return l;
+/* Convert a long long into a string. Returns the number of
+ * characters needed to represent the number.
+ * If the buffer is not big enough to store the string, 0 is returned.
+ *
+ * Based on the following article (that apparently does not provide a
+ * novel approach but only publicizes an already used technique):
+ *
+ * https://www.facebook.com/notes/facebook-engineering/three-optimization-tips-for-c/10151361643253920
+ *
+ * Modified in order to handle signed integers since the original code was
+ * designed for unsigned integers. */
+int ll2string(char* dst, size_t dstlen, long long svalue) {
+    static const char digits[201] =
+        "0001020304050607080910111213141516171819"
+        "2021222324252627282930313233343536373839"
+        "4041424344454647484950515253545556575859"
+        "6061626364656667686970717273747576777879"
+        "8081828384858687888990919293949596979899";
+    int negative;
+    unsigned long long value;
+
+    /* The main loop works with 64bit unsigned integers for simplicity, so
+     * we convert the number here and remember if it is negative. */
+    if (svalue < 0) {
+        if (svalue != LLONG_MIN) {
+            value = -svalue;
+        } else {
+            value = ((unsigned long long) LLONG_MAX)+1;
+        }
+        negative = 1;
+    } else {
+        value = svalue;
+        negative = 0;
+    }
+
+    /* Check length. */
+    uint32_t const length = digits10(value)+negative;
+    if (length >= dstlen) return 0;
+
+    /* Null term. */
+    uint32_t next = length;
+    dst[next] = '\0';
+    next--;
+    while (value >= 100) {
+        int const i = (value % 100) * 2;
+        value /= 100;
+        dst[next] = digits[i + 1];
+        dst[next - 1] = digits[i];
+        next -= 2;
+    }
+
+    /* Handle last 1-2 digits. */
+    if (value < 10) {
+        dst[next] = '0' + (uint32_t) value;
+    } else {
+        int i = (uint32_t) value * 2;
+        dst[next] = digits[i + 1];
+        dst[next - 1] = digits[i];
+    }
+
+    /* Add sign. */
+    if (negative) dst[0] = '-';
+    return length;
 }
 
 /* Convert a string into a long long. Returns 1 if the string could be parsed
@@ -402,7 +466,67 @@ void getRandomHexChars(char *p, unsigned int len) {
     /* Turn it into hex digits taking just 4 bits out of 8 for every byte. */
     for (j = 0; j < len; j++)
         p[j] = charset[p[j] & 0x0F];
-    fclose(fp);
+    if (fp) fclose(fp);
+}
+
+/* Given the filename, return the absolute path as an SDS string, or NULL
+ * if it fails for some reason. Note that "filename" may be an absolute path
+ * already, this will be detected and handled correctly.
+ *
+ * The function does not try to normalize everything, but only the obvious
+ * case of one or more "../" appearning at the start of "filename"
+ * relative path. */
+sds getAbsolutePath(char *filename) {
+    char cwd[1024];
+    sds abspath;
+    sds relpath = sdsnew(filename);
+
+    relpath = sdstrim(relpath," \r\n\t");
+    if (relpath[0] == '/') return relpath; /* Path is already absolute. */
+
+    /* If path is relative, join cwd and relative path. */
+    if (getcwd(cwd,sizeof(cwd)) == NULL) {
+        sdsfree(relpath);
+        return NULL;
+    }
+    abspath = sdsnew(cwd);
+    if (sdslen(abspath) && abspath[sdslen(abspath)-1] != '/')
+        abspath = sdscat(abspath,"/");
+
+    /* At this point we have the current path always ending with "/", and
+     * the trimmed relative path. Try to normalize the obvious case of
+     * trailing ../ elements at the start of the path.
+     *
+     * For every "../" we find in the filename, we remove it and also remove
+     * the last element of the cwd, unless the current cwd is "/". */
+    while (sdslen(relpath) >= 3 &&
+           relpath[0] == '.' && relpath[1] == '.' && relpath[2] == '/')
+    {
+        sdsrange(relpath,3,-1);
+        if (sdslen(abspath) > 1) {
+            char *p = abspath + sdslen(abspath)-2;
+            int trimlen = 1;
+
+            while(*p != '/') {
+                p--;
+                trimlen++;
+            }
+            sdsrange(abspath,0,-(trimlen+1));
+        }
+    }
+
+    /* Finally glue the two parts together. */
+    abspath = sdscatsds(abspath,relpath);
+    sdsfree(relpath);
+    return abspath;
+}
+
+/* Return true if the specified path is just a file basename without any
+ * relative or absolute path. This function just checks that no / or \
+ * character exists inside the specified path, that's enough in the
+ * environments where Redis runs. */
+int pathIsBaseName(char *path) {
+    return strchr(path,'/') == NULL && strchr(path,'\\') == NULL;
 }
 
 #ifdef UTIL_TEST_MAIN

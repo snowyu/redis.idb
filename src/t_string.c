@@ -69,7 +69,7 @@ void setGenericCommand(redisClient *c, int flags, robj *key, robj *val, robj *ex
         if (getLongLongFromObjectOrReply(c, expire, &milliseconds, NULL) != REDIS_OK)
             return;
         if (milliseconds <= 0) {
-            addReplyError(c,"invalid expire time in SETEX");
+            addReplyErrorFormat(c,"invalid expire time in %s",c->cmd->name);
             return;
         }
         if (unit == UNIT_SECONDS) milliseconds *= 1000;
@@ -215,12 +215,7 @@ void setrangeCommand(redisClient *c) {
             return;
 
         /* Create a copy when the object is shared or encoded. */
-        if (o->refcount != 1 || o->encoding != REDIS_ENCODING_RAW) {
-            robj *decoded = getDecodedObject(o);
-            o = createStringObject(decoded->ptr, sdslen(decoded->ptr));
-            decrRefCount(decoded);
-            dbOverwrite(c->db,c->argv[1],o);
-        }
+        o = dbUnshareStringValue(c->db,c->argv[1],o);
     }
 
     if (sdslen(value) > 0) {
@@ -236,13 +231,13 @@ void setrangeCommand(redisClient *c) {
 
 void getrangeCommand(redisClient *c) {
     robj *o;
-    long start, end;
+    long long start, end;
     char *str, llbuf[32];
     size_t strlen;
 
-    if (getLongFromObjectOrReply(c,c->argv[2],&start,NULL) != REDIS_OK)
+    if (getLongLongFromObjectOrReply(c,c->argv[2],&start,NULL) != REDIS_OK)
         return;
-    if (getLongFromObjectOrReply(c,c->argv[3],&end,NULL) != REDIS_OK)
+    if (getLongLongFromObjectOrReply(c,c->argv[3],&end,NULL) != REDIS_OK)
         return;
     if ((o = lookupKeyReadOrReply(c,c->argv[1],shared.emptybulk)) == NULL ||
         checkType(c,o,REDIS_STRING)) return;
@@ -260,11 +255,11 @@ void getrangeCommand(redisClient *c) {
     if (end < 0) end = strlen+end;
     if (start < 0) start = 0;
     if (end < 0) end = 0;
-    if ((unsigned)end >= strlen) end = strlen-1;
+    if ((unsigned long long)end >= strlen) end = strlen-1;
 
     /* Precondition: end >= 0 && end < strlen, so the only condition where
      * nothing can be returned is: start > end. */
-    if (start > end) {
+    if (start > end || strlen == 0) {
         addReply(c,shared.emptybulk);
     } else {
         addReplyBulkCBuffer(c,(char*)str+start,end-start+1);
@@ -433,15 +428,8 @@ void appendCommand(redisClient *c) {
         if (checkStringLength(c,totlen) != REDIS_OK)
             return;
 
-        /* If the object is shared or encoded, we have to make a copy */
-        if (o->refcount != 1 || o->encoding != REDIS_ENCODING_RAW) {
-            robj *decoded = getDecodedObject(o);
-            o = createStringObject(decoded->ptr, sdslen(decoded->ptr));
-            decrRefCount(decoded);
-            dbOverwrite(c->db,c->argv[1],o);
-        }
-
         /* Append the value */
+        o = dbUnshareStringValue(c->db,c->argv[1],o);
         o->ptr = sdscatlen(o->ptr,append->ptr,sdslen(append->ptr));
         totlen = sdslen(o->ptr);
     }

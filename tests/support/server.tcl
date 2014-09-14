@@ -41,6 +41,11 @@ proc kill_server config {
                     test "Check for memory leaks (pid $pid)" {
                         set output {0 leaks}
                         catch {exec leaks $pid} output
+                        if {[string match {*process does not exist*} $output] ||
+                            [string match {*cannot examine*} $output]} {
+                            # In a few tests we kill the server process.
+                            set output "0 leaks"
+                        }
                         set output
                     } {*0 leaks*}
                 }
@@ -106,7 +111,7 @@ proc clear_db {host port} {
 proc ping_server {host port} {
     set retval 0
     if {[catch {
-        set fd [socket $::host $::port]
+        set fd [socket $host $port]
         fconfigure $fd -translation binary
         puts $fd "PING\r\n"
         flush $fd
@@ -126,6 +131,22 @@ proc ping_server {host port} {
         }
     }
     return $retval
+}
+
+# Return 1 if the server at the specified addr is reachable by PING, otherwise
+# returns 0. Performs a try every 50 milliseconds for the specified number
+# of retries.
+proc server_is_up {host port retrynum} {
+    after 10 ;# Use a small delay to make likely a first-try success.
+    set retval 0
+    while {[incr retrynum -1]} {
+        if {[catch {ping_server $host $port} ping]} {
+            set ping 0
+        }
+        if {$ping} {return 1}
+        after 50
+    }
+    return 0
 }
 
 # doesn't really belong here, but highly coupled to code in start_server
@@ -220,23 +241,13 @@ proc start_server {options {code undefined}} {
     # check that the server actually started
     # ugly but tries to be as fast as possible...
     if {$::valgrind} {set retrynum 1000} else {set retrynum 100}
-    set serverisup 0
 
     if {$::verbose} {
         puts -nonewline "=== ($tags) Starting server ${::host}:${::port} "
     }
 
-    after 10
     if {$code ne "undefined"} {
-        while {[incr retrynum -1]} {
-            catch {
-                if {[ping_server $::host $::port]} {
-                    set serverisup 1
-                }
-            }
-            if {$serverisup} break
-            after 50
-        }
+        set serverisup [server_is_up $::host $::port $retrynum]
     } else {
         set serverisup 1
     }
@@ -254,7 +265,7 @@ proc start_server {options {code undefined}} {
     
     # find out the pid
     while {![info exists pid]} {
-        regexp {\[(\d+)\]} [exec cat $stdout] _ pid
+        regexp {PID:\s(\d+)} [exec cat $stdout] _ pid
         after 100
     }
 

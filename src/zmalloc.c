@@ -67,7 +67,10 @@ void zlibc_free(void *ptr) {
 #define free(ptr) je_free(ptr)
 #endif
 
-#ifdef HAVE_ATOMIC
+#if defined(__ATOMIC_RELAXED)
+#define update_zmalloc_stat_add(__n) __atomic_add_fetch(&used_memory, (__n), __ATOMIC_RELAXED)
+#define update_zmalloc_stat_sub(__n) __atomic_sub_fetch(&used_memory, (__n), __ATOMIC_RELAXED)
+#elif defined(HAVE_ATOMIC)
 #define update_zmalloc_stat_add(__n) __sync_add_and_fetch(&used_memory, (__n))
 #define update_zmalloc_stat_sub(__n) __sync_sub_and_fetch(&used_memory, (__n))
 #else
@@ -176,7 +179,7 @@ void *zrealloc(void *ptr, size_t size) {
 }
 
 /* Provide zmalloc_size() for systems where this function is not provided by
- * malloc itself, given that in that case we store an header with this
+ * malloc itself, given that in that case we store a header with this
  * information as the first bytes of every allocation. */
 #ifndef HAVE_MALLOC_SIZE
 size_t zmalloc_size(void *ptr) {
@@ -219,8 +222,8 @@ size_t zmalloc_used_memory(void) {
     size_t um;
 
     if (zmalloc_thread_safe) {
-#ifdef HAVE_ATOMIC
-        um = __sync_add_and_fetch(&used_memory, 0);
+#if defined(__ATOMIC_RELAXED) || defined(HAVE_ATOMIC)
+        um = update_zmalloc_stat_add(0);
 #else
         pthread_mutex_lock(&used_memory_mutex);
         um = used_memory;
@@ -321,8 +324,8 @@ size_t zmalloc_get_rss(void) {
 #endif
 
 /* Fragmentation = RSS / allocated-bytes */
-float zmalloc_get_fragmentation_ratio(void) {
-    return (float)zmalloc_get_rss()/zmalloc_used_memory();
+float zmalloc_get_fragmentation_ratio(size_t rss) {
+    return (float)rss/zmalloc_used_memory();
 }
 
 #if defined(HAVE_PROC_SMAPS)
