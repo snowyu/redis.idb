@@ -182,21 +182,30 @@ static int saveKeyValuePairOnIDB(redisDb *db, robj *key, robj *val)
         sds vK = getKeyNameOnIDB(db->id, vKey);
         sds v = NULL;
         //if (vAttr == NULL || strncasecmp(vAttr, IDB_VALUE_NAME, strlen(IDB_VALUE_NAME)) == 0) {
-            rioInitWithBuffer(&vRedisIO,sdsempty());
-            if (rioWrite(&vRedisIO, REDIS_VALUE_MAGIC_FLAG, REDIS_VALUE_MAGIC_FLAG_LEN)==0) {
-                sdsfree(vRedisIO.io.buffer.ptr);
-                return -1;
+            if (val->type == REDIS_STRING) {
+                val = getDecodedObject(val);
+                v = val->ptr;
+                if (iPut(server.iDBPath, vK, sdslen(vK), v, sdslen(v), vAttr, server.iDBType) != 0) vResult = -1;
+                if (iPut(server.iDBPath, vK, sdslen(vK), "string", 6, IDB_KEY_TYPE_NAME, server.iDBType) != 0) vResult = -1;
+                decrRefCount(val);
+            } 
+            else {
+                rioInitWithBuffer(&vRedisIO,sdsempty());
+                if (rioWrite(&vRedisIO, REDIS_VALUE_MAGIC_FLAG, REDIS_VALUE_MAGIC_FLAG_LEN)==0) {
+                    sdsfree(vRedisIO.io.buffer.ptr);
+                    return -1;
+                }
+                if (vExpiredTime != -1) {
+                    if (rdbSaveType(&vRedisIO,REDIS_RDB_OPCODE_EXPIRETIME_MS) == -1) vResult = -1;
+                    if (rdbSaveMillisecondTime(&vRedisIO,vExpiredTime) == -1) vResult = -1;
+                }
+                if (rdbSaveObjectType(&vRedisIO,val) == -1) vResult = -1;
+                if (rdbSaveObject(&vRedisIO,val) == -1) vResult = -1;
+                v = vRedisIO.io.buffer.ptr;
+                if (iPut(server.iDBPath, vK, sdslen(vK), v, sdslen(v), vAttr, server.iDBType) != 0) vResult = -1;
+                if (iPut(server.iDBPath, vK, sdslen(vK), "redis", 5, IDB_KEY_TYPE_NAME, server.iDBType) != 0) vResult = -1;
+                sdsfree(v);
             }
-            if (vExpiredTime != -1) {
-                if (rdbSaveType(&vRedisIO,REDIS_RDB_OPCODE_EXPIRETIME_MS) == -1) vResult = -1;
-                if (rdbSaveMillisecondTime(&vRedisIO,vExpiredTime) == -1) vResult = -1;
-            }
-            if (rdbSaveObjectType(&vRedisIO,val) == -1) vResult = -1;
-            if (rdbSaveObject(&vRedisIO,val) == -1) vResult = -1;
-            v = vRedisIO.io.buffer.ptr;
-            if (iPut(server.iDBPath, vK, sdslen(vK), v, sdslen(v), vAttr, server.iDBType) != 0) vResult = -1;
-            if (iPut(server.iDBPath, vK, sdslen(vK), "redis", 5, IDB_KEY_TYPE_NAME, server.iDBType) != 0) vResult = -1;
-            sdsfree(v);
         /*}
         else if (val->type == REDIS_STRING) { //is attribute:
             val = getDecodedObject(val);
