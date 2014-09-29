@@ -71,7 +71,8 @@ static inline int dictReplaceObj(dict *d, robj *key, robj *val) {
     return result;
 }
 
-static int dictAppendTo(dict *src, dict *dest) {
+static int dictAppendTo(dict *src, dict *dest)
+{
     int vErr = REDIS_OK;
     dictIterator *di;
     dictEntry *de;
@@ -94,6 +95,51 @@ static int dictAppendTo(dict *src, dict *dest) {
         dictReleaseIterator(di);
     }
     return vErr;
+}
+
+//the c->argv[idx] is robj.
+static inline void addToDictBeginWith(dict *src, dict *dest, const robj *key)
+{
+    dictIterator *di = NULL;
+    dictEntry *de;
+    di = dictGetIterator(src);
+    if (di) {
+        while((de = dictNext(di)) != NULL) {
+            robj *kobj = dictGetKey(de);
+            if (!key || strBeginWith(kobj->ptr, key->ptr)) {
+                char *s = NULL;
+                if (key) { //remove the parent key path(related path always).
+                    s  = kobj->ptr;
+                    s += strlen(key->ptr)+1;
+                }
+                else {//only get root path key.
+                    s = strchr(kobj->ptr, '/');
+                    if (s)
+                        continue;
+                    else
+                        s= kobj->ptr;
+                }
+                robj *vobj = dictGetVal(de);
+                robj *sobj = createStringObject(s, strlen(s));
+                dictReplaceObj(dest, sobj, vobj);
+                decrRefCount(sobj);
+            }
+        }
+        dictReleaseIterator(di);
+    }
+
+}
+static inline dict *getDirtyKeysBeginWith(redisDb *db, const robj *key)
+{
+    dict *result = dictCreate(&hashDictType, NULL);
+    if (server.idb_child_pid == -1) {
+        addToDictBeginWith(db->dirtyKeys, result, key);
+    }
+    else {
+        addToDictBeginWith(db->dirtyQueue, result, key);
+        addToDictBeginWith(db->dirtyKeys, result, key);
+    }
+    return result;
 }
 
 dictEntry *getDictEntryOnDirtyKeys(redisDb *db, robj *key)
@@ -228,7 +274,7 @@ static int saveKeyValuePairOnIDB(redisDb *db, robj *key, robj *val)
 void setKeyOnIDB(redisDb *db, robj *key)
 {
     if (server.iDBEnabled) {
-            dictEntry *de = dictFind(db->dict,key->ptr);
+            dictEntry *de = dictFind(db->dict,key->ptr);//the sds string is on the robj->ptr
             if (de) {
                 //redisLog(REDIS_NOTICE, "set a key:%s", key->ptr);
                 //key = dictGetKey(de);
@@ -649,6 +695,7 @@ robj *lookupKeyOnIDB(redisDb *db, robj *key)
 //subkeys [keyPath [pattern [count [skipCount]]]]
 void subkeysCommand(redisClient *c) {
     sds vKeyPath = NULL;
+    robj *vKey = NULL;
     sds vPattern = NULL;
     long vSkipCount = 0, vCount = 0;
     if (c->argc > 5) { //the arg count = subkeys keyPath pattern count skipCount
@@ -664,8 +711,10 @@ void subkeysCommand(redisClient *c) {
         vCount = (IDBMaxPageCount > 0 && vCount > IDBMaxPageCount) ? IDBMaxPageCount : vCount;
         if (c->argc >= 3)
             vPattern = c->argv[2]->ptr;
-        if (c->argc >= 2)
+        if (c->argc >= 2) {
+            vKey = c->argv[1];
             vKeyPath = c->argv[1]->ptr;
+        }
 
         unsigned long numkeys = 0;
         void *replylen = addDeferredMultiBulkLength(c);
@@ -676,19 +725,40 @@ void subkeysCommand(redisClient *c) {
             vSkipCount, vCount, dkFixed);
         if (c->db->id != 0) sdsfree(vK);
         //redisLog(REDIS_WARNING, "dfffffff:\n");
+        dict *d = NULL;
+        if (!server.iDBSync) { //the async writing, some keys may be in the dirtyKeys&Queue.
+            d = getDirtyKeysBeginWith(c->db, vKey);
+            if (d) {
+                dictIterator *di = dictGetIterator(d);
+                dictEntry *de;
+                while((de = dictNext(di)) != NULL) {
+                    robj *vobj = dictGetVal(de);
+                    if (vobj) {
+                        robj *kobj = dictGetKey(de);
+                        addReplyBulk(c, kobj);
+                        numkeys++;
+                    }
+                }
+                dictReleaseIterator(di);
+            }
+        }
         if (vResult) {
             sds *vItem;
             robj *vObj;
+        printf("subkeys for_each\n");
             darray_foreach(vItem, *vResult) {
 //                fprintf(stderr, "got:%s\n", *vItem);
                 vObj = createObject(REDIS_STRING, *vItem);
-                addReplyBulk(c,vObj);
-                numkeys++;
+                if (!d || !dictFind(d, vObj)) {
+                    addReplyBulk(c,vObj);
+                    numkeys++;
+                }
                 decrRefCount(vObj);
             }
             darray_free(*vResult);
             zfree(vResult);
         }
+        if (d) dictRelease(d);
     //    sds s = sdsnew(NULL);
     //    s = sdscatprintf(s, "keys.argc=%d, dict.size=%lu", c->argc, dictSize(c->db->dict));
     //    robj *t = createStringObject(s,sdslen(s));

@@ -17,7 +17,7 @@ Options
 Internal
 ---------
 
-* !* [bug] subkeys fetch keys from disk only, so the dirty keys is not included!
+* * [bug] subkeys fetch keys from disk only, so the dirty keys is not included when iDB is async writing!
 * !* [bug] crash the server if load value is not the redis type.
   * put the type info into the value.
 * !+ Save value as json string into iDB storage.
@@ -102,7 +102,10 @@ No: put it into saveKeyValuePairOnIDB
     * keys a?, argc[0]="keys", argc[1] = "a?"
 * dict
   * dictsize(aDict) : get the count of keys in the dict
-
+  * dictFind(aDict, key): 
+    * the hashDictType use dictEncObjHash function: keys and values are robj(redis object).
+    * the dbDictType use dictSdsHash: keys are sds string, values are robj.
+    * u pass the wrong type to key would make server crash!! segment fatal.
 * + load/save expired info in iDB
 * + remove expired keys in iDB 
 
@@ -134,8 +137,12 @@ the internal pubsub feature can notify key changed:
   * howto get key do not triggle the events??? so I can use it as iDB save,
     * It seems that it would triggle events on read!!
 
-
-
+* create a ramdisk to test quickly.
+  * diskutil erasevolume HFS+ 'RAM Disk' `hdiutil attach -nomount ram://8388608`
+  * newfs_hfs -s `hdiutil attach -nomount ram://8388608`
+  * newfs_hfs -s the "-s" means case-sensitive.
+  * mount -t hfs /dev/disk5 tests/tmp/
+  * hdiutil detach /dev/disk5
 
 Build
 ------

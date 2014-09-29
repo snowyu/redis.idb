@@ -17,6 +17,19 @@ start_server {tags {"idb"}} {
     test {SUBKEYS to get second page} {
         lsort [r subkeys "" "" 3 3]
     } {key_x key_y key_z}
+    test {SUBKEYS add some keys in memory not flush to disk} {
+        foreach key {key_a key_b} {
+            r set $key hello
+        }
+         lsort [r subkeys]
+    } {foo_a foo_b foo_c key_a key_b key_x key_y key_z}
+    test {SUBKEYS del some keys in memory not flush to disk} {
+        foreach key {key_z key_x} {
+            r del $key
+        }
+         lsort [r subkeys]
+    } {foo_a foo_b foo_c key_a key_b key_y}
+
 
     test {ASET and AGET an item} {
         r aset x ".text" "hello"
