@@ -567,10 +567,11 @@ static robj *rioReadValueFromBuffer(redisDb *db, robj *key, sds vValueBuffer)
 }
 
 //lookup the key on IDB and cache it in the memory if found.
+//the lookupKeyOnIDB will be called when redis can not find the key in it's memory.
 robj *lookupKeyOnIDB(redisDb *db, robj *key)
 {
     robj *result = NULL;
-    //printf("lookupKeyOnIDB: %s\n", (char*)key->ptr);
+    redisLog(REDIS_DEBUG, "lookupKeyOnIDB: %s\n", (char*)key->ptr);
     if (server.iDBEnabled) {
         if (server.iDBSync == 0) {
             //dict *d = server.idb_child_pid == -1 ? db->dirtyKeys : db->dirtyQueue;
@@ -611,7 +612,7 @@ robj *lookupKeyOnIDB(redisDb *db, robj *key)
             vValueType   = sdsnewlen("str",3);
             sdsfree(vK);
         }*/
-        //printf("lookupKeyOnIDB Loaded: %s=%s\n", (char*)vKey, vValueBuffer);
+        redisLog(REDIS_DEBUG, "lookupKeyOnIDB Loaded: %s=%s\n", (char*)vKey, vValueBuffer);
         if (db->id != 0) sdsfree(vKey);
         if (vValueBuffer) {
             strToLowerCase(vValueType);
@@ -629,6 +630,14 @@ robj *lookupKeyOnIDB(redisDb *db, robj *key)
             }
         }
         SDSFreeAndNil(vValueType);
+
+        if (result) {
+            sds copy = sdsdup(key->ptr);
+            incrRefCount(result);
+            int retval = dictAdd(db->dict, copy, result);
+            redisAssertWithInfo(NULL,key,retval == REDIS_OK);
+            redisLog(REDIS_DEBUG, "lookupKeyOnIDB cached: %s=%s\n", (char*)vKey, vValueBuffer);
+        }
     }
     return result;
 }
