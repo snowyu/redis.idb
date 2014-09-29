@@ -87,12 +87,12 @@ New commands list here:
   * count: return the count of matched subkeys. it should be less than or equ idb-pagesize(if idb-pagesize enabled).
   * eg, subkeys, will return all the keys in the iDB if idb-pagesize == 0.
   * Note: keys command only return all keys in the memory cache.
-* Attribute operations: 
+* Attribute operations: [todo these attributes are Disk IO directly, no memcache yet] 
   * the attribute ".value" means the key's value.
   * the attribute ".type" means the key's type.
   * aset key attribute value: set the attribute of the key
   * aget/aexists/adel key attribute: get/(check exists)/del the attribute of the key
-  * attrs key: list the attributes of the key
+  * attrs key: list the attributes of the key(not fined)
 
 
 Build
@@ -113,6 +113,9 @@ if you update the deps/idb/ by git pull, you should make idb too:
 Todo
 -----
 
+* force to read the key's attributes from disk.
+* the key's attributes should be cached in memory.
+  * the simple way is treat the "." as reserved word, do not be allowed in key name.
 * the current dbsize command only for the keys in memcache.
 * the most of debug command only for the keys in memcache.
 * ![Bug] AOF can not work on iDB. because AOF is still use dict(memcache) to save.

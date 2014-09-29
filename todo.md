@@ -17,6 +17,7 @@ Options
 Internal
 ---------
 
+* !* [bug] subkeys fetch keys from disk only, so the dirty keys is not included!
 * !* [bug] crash the server if load value is not the redis type.
   * put the type info into the value.
 * !+ Save value as json string into iDB storage.
@@ -37,6 +38,8 @@ Internal
 * !+ dict* attributes in redis: cache the attributes here
   * attributes[key] = dict* attrs
 * !+ the escape '.' char in key name is not work fined.
+* lookupKeyOnIDB: get key inject here!
+
 
 No: put it into saveKeyValuePairOnIDB
 
