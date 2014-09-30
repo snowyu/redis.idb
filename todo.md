@@ -17,13 +17,13 @@ Options
 Internal
 ---------
 
-* * [bug] subkeys fetch keys from disk only, so the dirty keys is not included when iDB is async writing!
 * !* [bug] crash the server if load value is not the redis type.
   * put the type info into the value.
 * !+ Save value as json string into iDB storage.
 * !* dbsizeCommand(db.c)
 * !* renameGenericCommand should be optimal
   * delete and add is not enough.
+* * [bug] subkeys fetch keys from disk only, so the dirty keys is not included when iDB is async writing!
 * saveDictToIDB: iDelete should ignore error!!
 * deleteKeyOnIDB: supports async now.
 * TYPE command supports iDB now.
@@ -142,7 +142,7 @@ the internal pubsub feature can notify key changed:
   * newfs_hfs -s `hdiutil attach -nomount ram://8388608`
   * newfs_hfs -s the "-s" means case-sensitive.
   * mount -t hfs /dev/disk5 tests/tmp/
-  * hdiutil detach /dev/disk5
+  * hdiutil detach(eject) /dev/disk5
 
 Build
 ------

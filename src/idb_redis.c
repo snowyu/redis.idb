@@ -713,7 +713,7 @@ void subkeysCommand(redisClient *c) {
             vPattern = c->argv[2]->ptr;
         if (c->argc >= 2) {
             vKey = c->argv[1];
-            vKeyPath = c->argv[1]->ptr;
+            vKeyPath = vKey->ptr;
         }
 
         unsigned long numkeys = 0;
@@ -745,7 +745,6 @@ void subkeysCommand(redisClient *c) {
         if (vResult) {
             sds *vItem;
             robj *vObj;
-        printf("subkeys for_each\n");
             darray_foreach(vItem, *vResult) {
 //                fprintf(stderr, "got:%s\n", *vItem);
                 vObj = createObject(REDIS_STRING, *vItem);
