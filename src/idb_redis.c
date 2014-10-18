@@ -824,7 +824,7 @@ void adelCommand(redisClient *c) {
             }
         }
         else
-            if (iDelete(server.iDBPath, vKey, sdslen(vKey), attr->ptr, server.iDBType)) deleted++;
+            if (iDelete((const sds)server.iDBPath, (const char*)vKey, (const int)sdslen(vKey), (const char*)attr->ptr, (const int)server.iDBType)) deleted++;
         if (c->db->id != 0) sdsfree(vKey);
         if (deleted) {
             addReply(c, shared.ok);
