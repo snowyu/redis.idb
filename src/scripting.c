@@ -30,6 +30,7 @@
 #include "redis.h"
 #include "sha1.h"
 #include "rand.h"
+#include "cluster.h"
 
 #include <lua.h>
 #include <lauxlib.h>
@@ -213,11 +214,27 @@ int luaRedisGenericCommand(lua_State *lua, int raise_error) {
     static int argv_size = 0;
     static robj *cached_objects[LUA_CMD_OBJCACHE_SIZE];
     static size_t cached_objects_len[LUA_CMD_OBJCACHE_SIZE];
+    static int inuse = 0;   /* Recursive calls detection. */
+
+    /* By using Lua debug hooks it is possible to trigger a recursive call
+     * to luaRedisGenericCommand(), which normally should never happen.
+     * To make this function reentrant is futile and makes it slower, but
+     * we should at least detect such a misuse, and abort. */
+    if (inuse) {
+        char *recursion_warning =
+            "luaRedisGenericCommand() recursive call detected. "
+            "Are you doing funny stuff with Lua debug hooks?";
+        redisLog(REDIS_WARNING,"%s",recursion_warning);
+        luaPushError(lua,recursion_warning);
+        return 1;
+    }
+    inuse++;
 
     /* Require at least one argument */
     if (argc == 0) {
         luaPushError(lua,
             "Please specify at least one argument for redis.call()");
+        inuse--;
         return 1;
     }
 
@@ -272,6 +289,7 @@ int luaRedisGenericCommand(lua_State *lua, int raise_error) {
         }
         luaPushError(lua,
             "Lua redis() command arguments must be strings or integers");
+        inuse--;
         return 1;
     }
 
@@ -291,6 +309,7 @@ int luaRedisGenericCommand(lua_State *lua, int raise_error) {
             luaPushError(lua,"Unknown Redis command called from Lua script");
         goto cleanup;
     }
+    c->cmd = cmd;
 
     /* There are commands that are not allowed inside scripts. */
     if (cmd->flags & REDIS_CMD_NOSCRIPT) {
@@ -337,8 +356,24 @@ int luaRedisGenericCommand(lua_State *lua, int raise_error) {
     if (cmd->flags & REDIS_CMD_RANDOM) server.lua_random_dirty = 1;
     if (cmd->flags & REDIS_CMD_WRITE) server.lua_write_dirty = 1;
 
+    /* If this is a Redis Cluster node, we need to make sure Lua is not
+     * trying to access non-local keys, with the exception of commands
+     * received from our master. */
+    if (server.cluster_enabled && !(server.lua_caller->flags & REDIS_MASTER)) {
+        /* Duplicate relevant flags in the lua client. */
+        c->flags &= ~(REDIS_READONLY|REDIS_ASKING);
+        c->flags |= server.lua_caller->flags & (REDIS_READONLY|REDIS_ASKING);
+        if (getNodeByQuery(c,c->cmd,c->argv,c->argc,NULL,NULL) !=
+                           server.cluster->myself)
+        {
+            luaPushError(lua,
+                "Lua script attempted to access a non local key in a "
+                "cluster node");
+            goto cleanup;
+        }
+    }
+
     /* Run the command */
-    c->cmd = cmd;
     call(c,REDIS_CALL_SLOWLOG | REDIS_CALL_STATS);
 
     /* Convert the result of the Redis command into a suitable Lua type.
@@ -409,8 +444,10 @@ cleanup:
          * return the plain error. */
         lua_pushstring(lua,"err");
         lua_gettable(lua,-2);
+        inuse--;
         return lua_error(lua);
     }
+    inuse--;
     return 1;
 }
 
@@ -537,6 +574,7 @@ void luaLoadLib(lua_State *lua, const char *libname, lua_CFunction luafunc) {
 LUALIB_API int (luaopen_cjson) (lua_State *L);
 LUALIB_API int (luaopen_struct) (lua_State *L);
 LUALIB_API int (luaopen_cmsgpack) (lua_State *L);
+LUALIB_API int (luaopen_bit) (lua_State *L);
 
 void luaLoadLibraries(lua_State *lua) {
     luaLoadLib(lua, "", luaopen_base);
@@ -547,6 +585,7 @@ void luaLoadLibraries(lua_State *lua) {
     luaLoadLib(lua, "cjson", luaopen_cjson);
     luaLoadLib(lua, "struct", luaopen_struct);
     luaLoadLib(lua, "cmsgpack", luaopen_cmsgpack);
+    luaLoadLib(lua, "bit", luaopen_bit);
 
 #if 0 /* Stuff that we don't load currently, for sandboxing concerns. */
     luaLoadLib(lua, LUA_LOADLIBNAME, luaopen_package);
@@ -717,7 +756,7 @@ void scriptingInit(void) {
         server.lua_client->flags |= REDIS_LUA_CLIENT;
     }
 
-    /* Lua beginners ofter don't use "local", this is likely to introduce
+    /* Lua beginners often don't use "local", this is likely to introduce
      * subtle bugs in their code. To prevent problems we protect accesses
      * to global variables. */
     scriptingEnableGlobalsProtection(lua);

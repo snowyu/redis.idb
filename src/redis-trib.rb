@@ -50,14 +50,16 @@ end
 class ClusterNode
     def initialize(addr)
         s = addr.split(":")
-        if s.length != 2
-            puts "Invalid node name #{addr}"
-            exit 1
+        if s.length < 2
+           puts "Invalid IP or Port (given as #{addr}) - use IP:Port format"
+           exit 1
         end
+        port = s.pop # removes port from split array
+        ip = s.join(":") # if s.length > 1 here, it's IPv6, so restore address
         @r = nil
         @info = {}
-        @info[:host] = s[0]
-        @info[:port] = s[1]
+        @info[:host] = ip
+        @info[:port] = port
         @info[:slots] = {}
         @info[:migrating] = {}
         @info[:importing] = {}
@@ -70,7 +72,7 @@ class ClusterNode
         @friends
     end
 
-    def slots 
+    def slots
         @info[:slots]
     end
 
@@ -152,7 +154,7 @@ class ClusterNode
                     end
                 } if slots
                 @dirty = false
-                @r.cluster("info").split("\n").each{|e|    
+                @r.cluster("info").split("\n").each{|e|
                     k,v=e.split(":")
                     k = k.to_sym
                     v.chop!
@@ -211,7 +213,7 @@ class ClusterNode
         #
         # Note: this could be easily written without side effects,
         # we use 'slots' just to split the computation into steps.
-        
+
         # First step: we want an increasing array of integers
         # for instance: [1,2,3,4,5,8,9,20,21,22,23,24,25,30]
         slots = @info[:slots].keys.sort
@@ -271,7 +273,7 @@ class ClusterNode
     def info
         @info
     end
-    
+
     def is_dirty?
         @dirty
     end
@@ -538,7 +540,6 @@ class RedisTrib
         nodes_count = @nodes.length
         masters_count = @nodes.length / (@replicas+1)
         masters = []
-        slaves = []
 
         # The first step is to split instances by IP. This is useful as
         # we'll try to allocate master nodes in different physical machines
@@ -556,15 +557,30 @@ class RedisTrib
 
         # Select master instances
         puts "Using #{masters_count} masters:"
-        while masters.length < masters_count
-            ips.each{|ip,nodes_list|
-                next if nodes_list.length == 0
-                masters << nodes_list.shift
-                puts masters[-1]
-                nodes_count -= 1
-                break if masters.length == masters_count
-            }
+        interleaved = []
+        stop = false
+        while not stop do
+            # Take one node from each IP until we run out of nodes
+            # across every IP.
+            ips.each do |ip,nodes|
+                if nodes.empty?
+                    # if this IP has no remaining nodes, check for termination
+                    if interleaved.length == nodes_count
+                        # stop when 'interleaved' has accumulated all nodes
+                        stop = true
+                        next
+                    end
+                else
+                    # else, move one node from this IP to 'interleaved'
+                    interleaved.push nodes.shift
+                end
+            end
         end
+
+        masters = interleaved.slice!(0, masters_count)
+        nodes_count -= masters.length
+
+        masters.each{|m| puts m}
 
         # Alloc slots on masters
         slots_per_node = ClusterHashSlots.to_f / masters_count
@@ -592,8 +608,8 @@ class RedisTrib
         # all nodes will be used.
         assignment_verbose = false
 
-        [:requested,:unused].each{|assign|
-            masters.each{|m|
+        [:requested,:unused].each do |assign|
+            masters.each do |m|
                 assigned_replicas = 0
                 while assigned_replicas < @replicas
                     break if nodes_count == 0
@@ -607,21 +623,33 @@ class RedisTrib
                                  "role too (#{nodes_count} remaining)."
                         end
                     end
-                    ips.each{|ip,nodes_list|
-                        next if nodes_list.length == 0
-                        # Skip instances with the same IP as the master if we
-                        # have some more IPs available.
-                        next if ip == m.info[:host] && nodes_count > nodes_list.length
-                        slave = nodes_list.shift
-                        slave.set_as_replica(m.info[:name])
-                        nodes_count -= 1
-                        assigned_replicas += 1
-                        puts "Adding replica #{slave} to #{m}"
-                        break
-                    }
+
+                    # Return the first node not matching our current master
+                    node = interleaved.find{|n| n.info[:host] != m.info[:host]}
+
+                    # If we found a node, use it as a best-first match.
+                    # Otherwise, we didn't find a node on a different IP, so we
+                    # go ahead and use a same-IP replica.
+                    if node
+                        slave = node
+                        interleaved.delete node
+                    else
+                        slave = interleaved.shift
+                    end
+                    slave.set_as_replica(m.info[:name])
+                    nodes_count -= 1
+                    assigned_replicas += 1
+                    puts "Adding replica #{slave} to #{m}"
+
+                    # If we are in the "assign extra nodes" loop,
+                    # we want to assign one extra replica to each
+                    # master before repeating masters.
+                    # This break lets us assign extra replicas to masters
+                    # in a round-robin way.
+                    break if assign == :unused
                 end
-            }
-        }
+            end
+        end
     end
 
     def flush_nodes_config
@@ -761,7 +789,7 @@ class RedisTrib
 
     # Move slots between source and target nodes using MIGRATE.
     #
-    # Options: 
+    # Options:
     # :verbose -- Print a dot for every moved key.
     # :fix     -- We are moving in the context of a fix. Use REPLACE.
     # :cold    -- Move keys without opening / reconfiguring the nodes.
@@ -1137,7 +1165,7 @@ class RedisTrib
         # right node as needed.
         cursor = nil
         while cursor != 0
-            cursor,keys = source.scan(cursor,:count,1000)
+            cursor,keys = source.scan(cursor, :count => 1000)
             cursor = cursor.to_i
             keys.each{|k|
                 # Migrate keys using the MIGRATE command.
@@ -1204,7 +1232,7 @@ end
 
 #################################################################################
 # Libraries
-# 
+#
 # We try to don't depend on external libs since this is a critical part
 # of Redis Cluster.
 #################################################################################

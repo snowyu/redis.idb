@@ -53,19 +53,31 @@ test "Cluster consistency during live resharding" {
             puts -nonewline "...Starting resharding..."
             flush stdout
             set target [dict get [get_myself [randomInt 5]] id]
-            set tribpid [exec \
+            set tribpid [lindex [exec \
                 ../../../src/redis-trib.rb reshard \
                 --from all \
                 --to $target \
                 --slots 100 \
                 --yes \
-                127.0.0.1:[get_instance_attrib redis 0 port] &]
+                127.0.0.1:[get_instance_attrib redis 0 port] \
+                | [info nameofexecutable] \
+                ../tests/helpers/onlydots.tcl \
+                &] 0]
         }
 
         # Write random data to random list.
-        set key "key:[randomInt $numkeys]"
+        set listid [randomInt $numkeys]
+        set key "key:$listid"
         set ele [randomValue]
-        $cluster rpush $key $ele
+        # We write both with Lua scripts and with plain commands.
+        # This way we are able to stress Lua -> Redis command invocation
+        # as well, that has tests to prevent Lua to write into wrong
+        # hash slots.
+        if {$listid % 2} {
+            $cluster rpush $key $ele
+        } else {
+            $cluster eval {redis.call("rpush",KEYS[1],ARGV[1])} 1 $key $ele
+        }
         lappend content($key) $ele
 
         if {($j % 1000) == 0} {

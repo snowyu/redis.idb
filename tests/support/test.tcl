@@ -19,9 +19,12 @@ proc assert_match {pattern value} {
     }
 }
 
-proc assert_equal {expected value} {
+proc assert_equal {expected value {detail ""}} {
     if {$expected ne $value} {
-        error "assertion:Expected '$value' to be equal to '$expected'"
+        if {$detail ne ""} {
+            set detail " (detail: $detail)"
+        }
+        error "assertion:Expected '$value' to be equal to '$expected'$detail"
     }
 }
 
@@ -29,7 +32,7 @@ proc assert_error {pattern code} {
     if {[catch {uplevel 1 $code} error]} {
         assert_match $pattern $error
     } else {
-        error "assertion:Expected an error but nothing was catched"
+        error "assertion:Expected an error but nothing was caught"
     }
 }
 

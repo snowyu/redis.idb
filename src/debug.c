@@ -252,6 +252,12 @@ void computeDatasetDigest(unsigned char *final) {
     }
 }
 
+void inputCatSds(void *result, const char *str) {
+    /* result is actually a (sds *), so re-cast it here */
+    sds *info = (sds *)result;
+    *info = sdscat(*info, str);
+}
+
 void debugCommand(redisClient *c) {
     if (!strcasecmp(c->argv[1]->ptr,"segfault")) {
         *((char*)-1) = 'x';
@@ -295,13 +301,46 @@ void debugCommand(redisClient *c) {
         val = dictGetVal(de);
         strenc = strEncoding(val->encoding);
 
+        char extra[128] = {0};
+        if (val->encoding == REDIS_ENCODING_QUICKLIST) {
+            char *nextra = extra;
+            int remaining = sizeof(extra);
+            quicklist *ql = val->ptr;
+            /* Add number of quicklist nodes */
+            int used = snprintf(nextra, remaining, " ql_nodes:%u", ql->len);
+            nextra += used;
+            remaining -= used;
+            /* Add average quicklist fill factor */
+            double avg = (double)ql->count/ql->len;
+            used = snprintf(nextra, remaining, " ql_avg_node:%.2f", avg);
+            nextra += used;
+            remaining -= used;
+            /* Add quicklist fill level / max ziplist size */
+            used = snprintf(nextra, remaining, " ql_ziplist_max:%d", ql->fill);
+            nextra += used;
+            remaining -= used;
+            /* Add isCompressed? */
+            int compressed = ql->compress != 0;
+            used = snprintf(nextra, remaining, " ql_compressed:%d", compressed);
+            nextra += used;
+            remaining -= used;
+            /* Add total uncompressed size */
+            unsigned long sz = 0;
+            for (quicklistNode *node = ql->head; node; node = node->next) {
+                sz += node->sz;
+            }
+            used = snprintf(nextra, remaining, " ql_uncompressed_size:%lu", sz);
+            nextra += used;
+            remaining -= used;
+        }
+
         addReplyStatusFormat(c,
             "Value at:%p refcount:%d "
-            "encoding:%s serializedlength:%lld "
-            "lru:%d lru_seconds_idle:%llu",
+            "encoding:%s serializedlength:%zu "
+            "lru:%d lru_seconds_idle:%llu%s",
             (void*)val, val->refcount,
-            strenc, (long long) rdbSavedObjectLen(val),
-            val->lru, estimateObjectIdleTime(val));
+            strenc, rdbSavedObjectLen(val),
+            val->lru, estimateObjectIdleTime(val)/1000, extra);
     } else if (!strcasecmp(c->argv[1]->ptr,"sdslen") && c->argc == 3) {
         dictEntry *de;
         robj *val;
@@ -336,9 +375,9 @@ void debugCommand(redisClient *c) {
         dictExpand(c->db->dict,keys);
         for (j = 0; j < keys; j++) {
             snprintf(buf,sizeof(buf),"%s:%lu",
-                (c->argc == 3) ? "key" : c->argv[3]->ptr, j);
+                (c->argc == 3) ? "key" : (char*)c->argv[3]->ptr, j);
             key = createStringObject(buf,strlen(buf));
-            if (lookupKeyRead(c->db,key) != NULL) {
+            if (lookupKeyWrite(c->db,key) != NULL) {
                 decrRefCount(key);
                 continue;
             }
@@ -379,6 +418,25 @@ void debugCommand(redisClient *c) {
         errstr = sdsmapchars(errstr,"\n\r","  ",2); /* no newlines in errors. */
         errstr = sdscatlen(errstr,"\r\n",2);
         addReplySds(c,errstr);
+    } else if (!strcasecmp(c->argv[1]->ptr,"structsize") && c->argc == 2) {
+        sds sizes = sdsempty();
+        sizes = sdscatprintf(sizes,"bits:%d ", (sizeof(void*) == 8)?64:32);
+        sizes = sdscatprintf(sizes,"robj:%d ", (int)sizeof(robj));
+        sizes = sdscatprintf(sizes,"dictentry:%d ", (int)sizeof(dictEntry));
+        sizes = sdscatprintf(sizes,"sdshdr:%d", (int)sizeof(struct sdshdr));
+        addReplyBulkSds(c,sizes);
+    } else if (!strcasecmp(c->argv[1]->ptr,"jemalloc") && c->argc == 3) {
+#if defined(USE_JEMALLOC)
+        if (!strcasecmp(c->argv[2]->ptr, "info")) {
+            sds info = sdsempty();
+            je_malloc_stats_print(inputCatSds, &info, NULL);
+            addReplyBulkSds(c, info);
+        } else {
+            addReplyErrorFormat(c, "Valid jemalloc debug fields: info");
+        }
+#else
+        addReplyErrorFormat(c, "jemalloc support not available");
+#endif
     } else {
         addReplyErrorFormat(c, "Unknown DEBUG subcommand or wrong number of arguments for '%s'",
             (char*)c->argv[1]->ptr);
@@ -852,12 +910,12 @@ void sigsegvHandler(int sig, siginfo_t *info, void *secret) {
 
     redisLog(REDIS_WARNING,
 "\n=== REDIS BUG REPORT END. Make sure to include from START to END. ===\n\n"
-"       Please report the crash opening an issue on github:\n\n"
+"       Please report the crash by opening an issue on github:\n\n"
 "           http://github.com/antirez/redis/issues\n\n"
 "  Suspect RAM error? Use redis-server --test-memory to verify it.\n\n"
 );
     /* free(messages); Don't call free() with possibly corrupted memory. */
-    if (server.daemonize) unlink(server.pidfile);
+    if (server.daemonize && server.supervised == 0) unlink(server.pidfile);
 
     /* Make sure we exit with the right signal at the end. So for instance
      * the core will be dumped if enabled. */

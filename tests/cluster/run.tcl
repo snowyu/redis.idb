@@ -1,5 +1,5 @@
 # Cluster test suite. Copyright (C) 2014 Salvatore Sanfilippo antirez@gmail.com
-# This softare is released under the BSD License. See the COPYING file for
+# This software is released under the BSD License. See the COPYING file for
 # more information.
 
 cd tests/cluster
@@ -17,10 +17,12 @@ proc main {} {
     }
     run_tests
     cleanup
+    end_tests
 }
 
 if {[catch main e]} {
     puts $::errorInfo
+    if {$::pause_on_error} pause_on_error
     cleanup
     exit 1
 }
