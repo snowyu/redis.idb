@@ -234,7 +234,7 @@ static int saveKeyValuePairOnIDB(redisDb *db, robj *key, robj *val)
                 if (iPut(server.iDBPath, vK, sdslen(vK), v, sdslen(v), vAttr, server.iDBType) != 0) vResult = -1;
                 if (iPut(server.iDBPath, vK, sdslen(vK), "string", 6, IDB_KEY_TYPE_NAME, server.iDBType) != 0) vResult = -1;
                 decrRefCount(val);
-            } 
+            }
             else {
                 rioInitWithBuffer(&vRedisIO,sdsempty());
                 if (rioWrite(&vRedisIO, REDIS_VALUE_MAGIC_FLAG, REDIS_VALUE_MAGIC_FLAG_LEN)==0) {
@@ -432,6 +432,7 @@ int flushAllToIDB() {
     }
     if (vErr == REDIS_OK) {
         redisLog(REDIS_NOTICE,"IDB saved %lu on disk", count);
+        server.dirty = 0;  //TODO: be careful, it will set the dirty = 0 too if RDB saved.
         server.idb_lastsave = time(NULL);
         server.idb_lastbgsave_status = REDIS_OK;
     }
@@ -492,8 +493,9 @@ int iDBSaveBackground()
     if (server.idb_child_pid != -1) return REDIS_ERR;
 
     server.idb_dirty_before_bgsave = server.dirty;
-
+    /*
     server.dirty_before_bgsave = server.dirty;
+    */
     server.lastbgsave_try = time(NULL);
 
     start = ustime();
@@ -520,6 +522,7 @@ int iDBSaveBackground()
         server.stat_fork_rate = (double) zmalloc_used_memory() * 1000000 / server.stat_fork_time / (1024*1024*1024); /* GB per second. */
         latencyAddSampleIfNeeded("fork",server.stat_fork_time/1000);
         if (childpid == -1) {
+            server.lastbgsave_status = REDIS_ERR;
             redisLog(REDIS_WARNING,"IDB Can't save in background: fork: %s",
                 strerror(errno));
             return REDIS_ERR;
@@ -533,7 +536,8 @@ int iDBSaveBackground()
     return REDIS_OK; /* unreached */
 }
 
-/* A background saving child (BGSAVE) terminated its work. Handle this. */
+/* A background saving child (BGSAVE) terminated its work. Handle this.
+ * This function covers the case of actual BGSAVEs. */
 void backgroundIDBSaveDoneHandler(int exitcode, int bysignal) {
     if (!bysignal && exitcode == 0) {
         redisLog(REDIS_NOTICE,
@@ -547,8 +551,14 @@ void backgroundIDBSaveDoneHandler(int exitcode, int bysignal) {
         server.idb_lastbgsave_status = REDIS_ERR;
         restoreServerToDirtyKeys();
     } else {
+        mstime_t latency;
+
         redisLog(REDIS_WARNING,
             "IDB Background saving terminated by signal %d", bysignal);
+        latencyStartMonitor(latency);
+        rdbRemoveTempFile(server.idb_child_pid);
+        latencyEndMonitor(latency);
+        latencyAddSampleIfNeeded("idb-unlink-temp-file",latency);
         /* SIGUSR1 is whitelisted, so we have a way to kill a child without
          * tirggering an error conditon. */
         if (bysignal != SIGUSR1)
@@ -560,7 +570,7 @@ void backgroundIDBSaveDoneHandler(int exitcode, int bysignal) {
     server.idb_save_time_start = -1;
     /* Possibly there are slaves waiting for a BGSAVE in order to be served
      * (the first stage of SYNC is a bulk transfer of dump.rdb) */
-    updateSlavesWaitingBgsave(exitcode == 0 ? REDIS_OK : REDIS_ERR);
+    updateSlavesWaitingBgsave((!bysignal && exitcode == 0) ? REDIS_OK : REDIS_ERR, REDIS_RDB_CHILD_TYPE_DISK);
 }
 
 static robj *rioReadValueFromBuffer(redisDb *db, robj *key, sds vValueBuffer)
@@ -598,17 +608,17 @@ static robj *rioReadValueFromBuffer(redisDb *db, robj *key, sds vValueBuffer)
                     result->lru = server.lruclock;
             }
             else
-                redisLog(REDIS_WARNING, "(lookupKeyOnIDB) load value is invalid for key: %s\n", (char*)key->ptr);
+                redisLog(REDIS_WARNING, "(rioReadValueFromBuffer) load value is invalid for key: %s\n", (char*)key->ptr);
         }
         else if (vExpiredTime != -1){
             //remove expired key
             iKeyDelete(server.iDBPath, key->ptr, sdslen(key->ptr));
         }
         else
-            redisLog(REDIS_WARNING, "(lookupKeyOnIDB) load expiredTime is invalid for key: %s\n", (char*)key->ptr);
+            redisLog(REDIS_WARNING, "(rioReadValueFromBuffer) load expiredTime is invalid for key: %s\n", (char*)key->ptr);
     }
     else
-        redisLog(REDIS_WARNING, "(lookupKeyOnIDB) load type is invalid for key: %s\n", (char*)key->ptr);
+        redisLog(REDIS_WARNING, "(rioReadValueFromBuffer) load type is invalid for key: %s\n", (char*)key->ptr);
     return result;
 }
 
@@ -662,28 +672,30 @@ robj *lookupKeyOnIDB(redisDb *db, robj *key)
         if (db->id != 0) sdsfree(vKey);
         if (vValueBuffer) {
             strToLowerCase(vValueType);
-            if (strncmp(vValueType, "redis", 5) == 0) {
+            if (strncmp(vValueType, "redis", 5) == 0) { //load redis type directly:
                 result = rioReadValueFromBuffer(db, key, vValueBuffer);
                 sdsfree(vValueBuffer);
             }
-            else if (strncmp(vValueType, "str", 3) == 0) {
-                result = createObject(REDIS_STRING, vValueBuffer);
-            }
-            else {
-                sdsfree(vValueBuffer);
-                redisLog(REDIS_WARNING, "(lookupKeyOnIDB) invalid key type '%s' on %s\n", vValueType, (char*)key->ptr);
-            //    addReplyErrorFormat(c,"invalid key type on %s", (char*)key->ptr);
+            else { //laod the iDB types:
+                if (strncmp(vValueType, "str", 3) == 0) {
+                    result = createObject(REDIS_STRING, vValueBuffer);
+                }
+                else {
+                    sdsfree(vValueBuffer);
+                    redisLog(REDIS_WARNING, "(lookupKeyOnIDB) invalid key type '%s' on %s\n", vValueType, (char*)key->ptr);
+                //    addReplyErrorFormat(c,"invalid key type on %s", (char*)key->ptr);
+                }
+                if (result) {
+                    sds copy = sdsdup(key->ptr);
+                    incrRefCount(result);
+                    int retval = dictAdd(db->dict, copy, result);
+                    redisAssertWithInfo(NULL,key,retval == REDIS_OK);
+                    redisLog(REDIS_DEBUG, "lookupKeyOnIDB cached: %s=%s\n", (char*)vKey, vValueBuffer);
+                }
             }
         }
         SDSFreeAndNil(vValueType);
 
-        if (result) {
-            sds copy = sdsdup(key->ptr);
-            incrRefCount(result);
-            int retval = dictAdd(db->dict, copy, result);
-            redisAssertWithInfo(NULL,key,retval == REDIS_OK);
-            redisLog(REDIS_DEBUG, "lookupKeyOnIDB cached: %s=%s\n", (char*)vKey, vValueBuffer);
-        }
     }
     return result;
 }
