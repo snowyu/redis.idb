@@ -598,6 +598,7 @@ static robj *rioReadValueFromBuffer(redisDb *db, robj *key, sds vValueBuffer)
                 //robj *o = createObject(REDIS_STRING,vValue);
                 //dbAdd(db, key, o);
                 sds copy = sdsdup(key->ptr);
+                //incrRefCount(result);
                 int retval = dictAdd(db->dict, copy, result);
                 redisAssertWithInfo(NULL,key,retval == REDIS_OK);
                 if (vExpiredTime != -1) setExpire(db, key, vExpiredTime);
@@ -687,7 +688,7 @@ robj *lookupKeyOnIDB(redisDb *db, robj *key)
                 }
                 if (result) {
                     sds copy = sdsdup(key->ptr);
-                    incrRefCount(result);
+                    //incrRefCount(result);
                     int retval = dictAdd(db->dict, copy, result);
                     redisAssertWithInfo(NULL,key,retval == REDIS_OK);
                     redisLog(REDIS_DEBUG, "lookupKeyOnIDB cached: %s=%s\n", (char*)vKey, vValueBuffer);

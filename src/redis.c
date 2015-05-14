@@ -2389,6 +2389,67 @@ void closeListeningSockets(int unlink_unix_socket) {
     }
 }
 
+void freeSharedObjects(void) {
+    int j;
+
+    freeStringObject(shared.crlf);
+    freeStringObject(shared.ok);
+    freeStringObject(shared.err);
+    freeStringObject(shared.emptybulk);
+    freeStringObject(shared.czero);
+    freeStringObject(shared.cone);
+    freeStringObject(shared.cnegone);
+    freeStringObject(shared.nullbulk);
+    freeStringObject(shared.nullmultibulk);
+    freeStringObject(shared.emptymultibulk);
+    freeStringObject(shared.pong);
+    freeStringObject(shared.queued);
+    freeStringObject(shared.emptyscan);
+    freeStringObject(shared.wrongtypeerr);
+    freeStringObject(shared.nokeyerr);
+    freeStringObject(shared.syntaxerr);
+    freeStringObject(shared.sameobjecterr);
+    freeStringObject(shared.outofrangeerr);
+    freeStringObject(shared.noscripterr);
+    freeStringObject(shared.loadingerr);
+    freeStringObject(shared.slowscripterr);
+    freeStringObject(shared.masterdownerr);
+    freeStringObject(shared.bgsaveerr);
+    freeStringObject(shared.roslaveerr);
+    freeStringObject(shared.noautherr);
+    freeStringObject(shared.oomerr);
+    freeStringObject(shared.execaborterr);
+    freeStringObject(shared.noreplicaserr);
+    freeStringObject(shared.busykeyerr);
+    freeStringObject(shared.space);
+    freeStringObject(shared.colon);
+    freeStringObject(shared.plus);
+
+    freeStringObject(shared.messagebulk);
+    freeStringObject(shared.pmessagebulk);
+    freeStringObject(shared.subscribebulk);
+    freeStringObject(shared.unsubscribebulk);
+    freeStringObject(shared.psubscribebulk);
+    freeStringObject(shared.punsubscribebulk);
+    freeStringObject(shared.del);
+    freeStringObject(shared.rpop);
+    freeStringObject(shared.lpop);
+    freeStringObject(shared.lpush);
+    for (j = 0; j < REDIS_SHARED_BULKHDR_LEN; j++) {
+      freeStringObject(shared.mbulkhdr[j]);
+      freeStringObject(shared.bulkhdr[j]);
+    }
+    for (j = 0; j < REDIS_SHARED_SELECT_CMDS; j++) {
+      freeStringObject(shared.select[j]);
+    }
+    freeStringObject(shared.minstring);
+    freeStringObject(shared.maxstring);
+    for (j = 0; j < server.dbnum; j++) {
+      dictRelease(server.db[j].dict);
+    }
+
+}
+
 int prepareForShutdown(int flags) {
     int save = flags & REDIS_SHUTDOWN_SAVE;
     int nosave = flags & REDIS_SHUTDOWN_NOSAVE;
@@ -2462,6 +2523,14 @@ int prepareForShutdown(int flags) {
         iDecr(server.iDBPath, ".db", 3, ".locked", server.iDBType);
     }
     if (server.iDBPath) sdsfree(server.iDBPath);
+    dictRelease(server.commands);
+    dictRelease(server.orig_commands);
+    sdsfree(server.configfile);
+    sdsfree(server.aof_buf);
+    if (server.lua_client) freeClient(server.lua_client);
+
+    freeSharedObjects();
+
     redisLog(REDIS_WARNING,"%s is now ready to exit, bye bye...",
         server.sentinel_mode ? "Sentinel" : "Redis");
     return REDIS_OK;

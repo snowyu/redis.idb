@@ -3,7 +3,7 @@
 #
 #
 
-RAM_DISK=`hdiutil attach -nomount ram://7242880`
+RAM_DISK=`hdiutil attach -nomount ram://2414293`
 MOUNT_POINT=$1
 
 echo the disk is $RAM_DISK, the  mount point is $MOUNT_POINT
