@@ -11,9 +11,9 @@ Disk Data Storage Features Comparison
 
 ### RDB Storage
 
-Purpose: Redis is a memcache, but can save the memcache data to disk.
+Purpose: Redis is a memcache, but can save the memcached data to disk.
 
-* All save to disk even if it is only a change occurs.
+* Save all data to disk even if it is only once change occurs.
 * Support Asynchronous saved only.
 * much greater than the memory capacity of the storage will cause problems
 
@@ -38,6 +38,9 @@ Purpose: the Key/value Database(Persistent data storage) with a memcache.
 if set the expired time, it will cache in memory only instead of saving to iDB.
 if set the negated expired time, it will cache in memory for the abs(expired_time) and save to iDB.
 
+#### Known Issues for iDB
+
+* [Replication] the full resynchronization can not send the whole data if the database size greater than the memcache.
 
 
 Configuration
