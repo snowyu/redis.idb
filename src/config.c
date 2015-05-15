@@ -1081,7 +1081,6 @@ void configGetCommand(redisClient *c) {
     config_get_string_field("unixsocket",server.unixsocket);
     config_get_string_field("logfile",server.logfile);
     config_get_string_field("pidfile",server.pidfile);
-    config_get_string_field("idb-path",server.iDBPath);
 
     /* Numerical values */
     config_get_numerical_field("maxmemory",server.maxmemory);
@@ -1127,7 +1126,6 @@ void configGetCommand(redisClient *c) {
     config_get_numerical_field("min-slaves-to-write",server.repl_min_slaves_to_write);
     config_get_numerical_field("min-slaves-max-lag",server.repl_min_slaves_max_lag);
     config_get_numerical_field("hz",server.hz);
-    config_get_numerical_field("idb-pagesize",IDBMaxPageCount);
     config_get_numerical_field("cluster-node-timeout",server.cluster_node_timeout);
     config_get_numerical_field("cluster-migration-barrier",server.cluster_migration_barrier);
     config_get_numerical_field("cluster-slave-validity-factor",server.cluster_slave_validity_factor);
@@ -1151,9 +1149,6 @@ void configGetCommand(redisClient *c) {
     config_get_bool_field("activerehashing", server.activerehashing);
     config_get_bool_field("repl-disable-tcp-nodelay",
             server.repl_disable_tcp_nodelay);
-    config_get_bool_field("idb-enabled", server.iDBEnabled);
-    config_get_bool_field("idb-sync", server.iDBSync);
-    config_get_bool_field("rdb-enabled", server.rdbEnabled);
     config_get_bool_field("repl-diskless-sync",
             server.repl_diskless_sync);
     config_get_bool_field("aof-rewrite-incremental-fsync",
@@ -1172,6 +1167,12 @@ void configGetCommand(redisClient *c) {
             server.aof_fsync,aof_fsync_enum);
     config_get_enum_field("syslog-facility",
             server.syslog_facility,syslog_facility_enum);
+
+    config_get_bool_field("idb-enabled", server.iDBEnabled);
+    config_get_bool_field("rdb-enabled", server.rdbEnabled);
+    config_get_string_field("idb-path",server.iDBPath);
+    config_get_bool_field("idb-sync", server.iDBSync);
+    config_get_numerical_field("idb-pagesize",IDBMaxPageCount);
 
     /* Everything we can't handle with macros follows. */
 
