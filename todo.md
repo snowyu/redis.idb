@@ -2,6 +2,26 @@ db.c -- redisDb operation functions
 redis.h -- the redisDb struct defined here
 config.c -- the new store-path parameter here
 
+the redis get more and more complex. I need to split it to these features as plugin:
+
+* Basic(Main) Feature
+  * Configuration
+  * Command
+  * Basic Data Types
+  * Network
+  * Server
+  * Client
+  * Memcache
+* Storage Plugin
+  * RDB
+  * IDB
+  * AOF
+* Transaction Plugin
+* PubSub Message Plugin
+* Replication(Master/Slave) Plugin
+* Script Engine Plugin
+
+
 Options
 -------
 
@@ -17,27 +37,35 @@ Options
 Internal
 ---------
 
-* !* [bug] crash the server if load value is not the redis type.
+* ![bug] if rdb and idb are both enabled, the server.dirty will be cleared twice.
+  * the slave send SYNC command, the master starts background saving(rdb), then send the rdb file to slave.
+    And the master starts to buffer all new commands received that will modify the database. 
+    The master will then send to the slave all buffered commands. This is done as a stream of commands and
+    is in the same format of the Redis protocol itself.
+  * psync command(new): can masterTryPartialResynchronization.
+  * sync command: startBgsaveForReplication
+    * it seems no use the server.dirty when rdbSave().
+* ![bug] crash the server if load value is not the redis type.
   * put the type info into the value.
-* !+ Save value as json string into iDB storage.
-* !* dbsizeCommand(db.c)
-* !* renameGenericCommand should be optimal
+* ![feature] Save value as json string into iDB storage.
+* ![feature] dbsizeCommand(db.c)
+* ![feature] renameGenericCommand should be optimal
   * delete and add is not enough.
-* * [bug] subkeys fetch keys from disk only, so the dirty keys is not included when iDB is async writing!
+* [bug] subkeys fetch keys from disk only, so the dirty keys is not included when iDB is async writing!
 * saveDictToIDB: iDelete should ignore error!!
 * deleteKeyOnIDB: supports async now.
 * TYPE command supports iDB now.
-!* the expired time value is a signed integer(64bit), extension flags:
+* ![feature] the expired time value is a signed integer(64bit), extension flags:
   * -1: Never Save to iDB, but cache it for ever in memory.
   * <0: means the item of iDB cache expired time.
-+ AGET/ASET/AEXISTS/ADEL commands: get/set/exists/del attribute value of the iDB.
++ [feature] AGET/ASET/AEXISTS/ADEL commands: get/set/exists/del attribute value of the iDB.
   * AGET/AEXISTS/ADEL Key attribute
   * ASET Key attribute VALUE
   * ASET/AGET key .value = GET/SET Key
     * [key] .value == [key]
-* !+ dict* attributes in redis: cache the attributes here
-  * attributes[key] = dict* attrs
-* !+ the escape '.' char in key name is not work fined.
+* ![feature] dict\* attributes in redis: cache the attributes here
+  * attributes[key] = dict\* attrs
+* ![feature] the escape '.' char in key name is not work fined.
 * lookupKeyOnIDB: get key inject here!
 
 
@@ -143,12 +171,14 @@ the internal pubsub feature can notify key changed:
   * newfs_hfs -s the "-s" means case-sensitive.
   * mount -t hfs /dev/disk5 tests/tmp/
   * hdiutil detach(eject) /dev/disk5
+  * or diskutil unmountDisk /dev/disk5
 
 Build
 ------
 
     git clone idb.c deps/idb
     make persist-settings
+    make distclean
     make
 
 One redis server can have many redisDb. from 0 to server.dbnum-1.
