@@ -36,6 +36,7 @@ distclean:
 	-(cd hiredis && $(MAKE) clean) > /dev/null || true
 	-(cd linenoise && $(MAKE) clean) > /dev/null || true
 	-(cd lua && $(MAKE) clean) > /dev/null || true
+	-(cd geohash-int && $(MAKE) clean) > /dev/null || true
 	-(cd jemalloc && [ -f Makefile ] && $(MAKE) distclean) > /dev/null || true
 	-(rm -f .make-*)
 
@@ -82,10 +83,15 @@ jemalloc: .make-prerequisites
 
 .PHONY: jemalloc
 
+geohash-int: .make-prerequisites
+	@printf '%b %b\n' $(MAKECOLOR)MAKE$(ENDCOLOR) $(BINCOLOR)$@$(ENDCOLOR)
+	cd geohash-int && $(MAKE)
+
+.PHONY: geohash-int
+
 idb: .make-prerequisites
 	@printf '%b %b\n' $(MAKECOLOR)MAKE$(ENDCOLOR) $(BINCOLOR)$@$(ENDCOLOR)
 	mkdir -p idb/build
 	cd idb/build && cmake .. && make
 
 .PHONY: idb
-
